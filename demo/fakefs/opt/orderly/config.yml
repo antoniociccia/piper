@@ -1,0 +1,39 @@
+app:
+  name: orderly
+  version: 2.4.1
+  env: production
+  bind: 0.0.0.0:4000
+
+database:
+  driver: postgres
+  host: 127.0.0.1
+  port: 5432
+  database: orderly
+  user: orderly_app
+  # password loaded from /opt/orderly/.env
+
+cache:
+  driver: redis
+  host: 127.0.0.1
+  port: 6379
+  ttl_seconds: 300
+
+# Three components are declared. The web server + worker are managed by the
+# init script at /opt/orderly/bin/orderly. Both should be running.
+components:
+  web:
+    enabled: true
+    command: node /opt/orderly/dist/server.js
+    pidfile: /run/orderly/web.pid
+    log: /var/log/orderly/app.log
+
+  worker:
+    enabled: true
+    command: node /opt/orderly/dist/worker.js
+    pidfile: /run/orderly/worker.pid
+    log: /var/log/orderly/worker.log
+    concurrency: 4
+
+  scheduler:
+    enabled: false
+    command: node /opt/orderly/dist/scheduler.js

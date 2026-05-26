@@ -1,0 +1,7 @@
+services:
+  sshd:
+    build: .
+    container_name: piper-e2e-sshd
+    ports:
+      - "12222:22"
+    restart: "no"

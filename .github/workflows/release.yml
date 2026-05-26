@@ -1,0 +1,169 @@
+name: release
+
+# Triggered by pushing a semver tag (e.g. `v0.1.0`, `v0.2.0-rc.1`).
+# - Cross-builds the single binary for darwin/linux × x64/arm64 using
+#   Bun's `--target` cross-compile (all from a single Linux runner).
+# - Generates release notes from Conventional Commits since the previous tag.
+# - Publishes a GitHub Release with the binaries attached.
+#
+# Pre-1.0 tags with a hyphen suffix (rc, alpha, beta) ship as pre-releases.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    # Belt-and-braces: don't ship a tag that fails CI on the same SHA.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ">=1.2.0"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            asset: piper-linux-x64
+          - target: bun-linux-arm64
+            asset: piper-linux-arm64
+          - target: bun-darwin-x64
+            asset: piper-darwin-x64
+          - target: bun-darwin-arm64
+            asset: piper-darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ">=1.2.0"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cross-compile (${{ matrix.target }})
+        run: |
+          mkdir -p dist
+          bun build --compile \
+            --target=${{ matrix.target }} \
+            --outfile=dist/${{ matrix.asset }} \
+            src/index.tsx
+
+      - name: Shasum
+        run: |
+          cd dist
+          shasum -a 256 ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+          cat ${{ matrix.asset }}.sha256
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history to diff against the previous tag.
+          fetch-depth: 0
+
+      - name: Download all built binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artefact tree
+        # download-artifact v4 creates one subdir per artefact. We want them
+        # all next to each other before handing to action-gh-release.
+        run: |
+          mkdir -p release
+          find dist -type f \( -name 'piper-*' \) -exec cp -v {} release/ \;
+          ls -lh release/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          # Previous tag (exclude the current one). Empty string on first ever release.
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n1 || true)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "prev=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## ${TAG}"
+            echo ""
+            if [ -n "${PREV_TAG}" ]; then
+              echo "_Changes since [\`${PREV_TAG}\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${PREV_TAG}):_"
+              echo ""
+              git log "${PREV_TAG}..HEAD" \
+                --pretty=format:"- %s (%h)" \
+                --no-merges \
+                --reverse
+            else
+              echo "_First release._"
+              echo ""
+              git log --pretty=format:"- %s (%h)" --no-merges --reverse
+            fi
+            echo ""
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```bash'
+            echo "# macOS (Apple Silicon)"
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/piper-darwin-arm64"
+            echo "chmod +x piper-darwin-arm64 && mv piper-darwin-arm64 /usr/local/bin/piper"
+            echo ""
+            echo "# Linux x64"
+            echo "curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/piper-linux-x64"
+            echo "chmod +x piper-linux-x64 && sudo mv piper-linux-x64 /usr/local/bin/piper"
+            echo '```'
+            echo ""
+            echo "Verify the download against the matching \`.sha256\` published alongside each binary."
+          } > RELEASE_NOTES.md
+
+          echo "----- release notes preview -----"
+          cat RELEASE_NOTES.md
+
+      - name: Determine pre-release flag
+        id: prerelease
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: release/*
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          draft: false
+          fail_on_unmatched_files: true

@@ -1,0 +1,63 @@
+PIPER
+Copyright 2026 The PIPER Authors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================================
+Bundled / linked third-party software
+================================================================================
+
+This distribution includes the following third-party software:
+
+* PGlite — Apache-2.0 — https://github.com/electric-sql/pglite
+  Postgres compiled to WebAssembly. Embedded into the binary.
+
+* @huggingface/transformers — Apache-2.0 — https://github.com/huggingface/transformers.js
+  ONNX runtime inference for embedding models. Loaded lazily at first use.
+
+* Hugging Face model: Xenova/multilingual-e5-small — MIT — https://huggingface.co/intfloat/multilingual-e5-small
+  Downloaded at first use to ~/.piper/cache/models/ if WASM embedding mode is selected.
+  NOT bundled into the binary.
+
+* Ink — MIT — https://github.com/vadimdemedes/ink
+  React renderer for the terminal.
+
+* React — MIT — https://github.com/facebook/react
+
+* Zod — MIT — https://github.com/colinhacks/zod
+
+* gpt-tokenizer — MIT — https://github.com/niieani/gpt-tokenizer
+  Pure-JS BPE tokenizer for cl100k_base.
+
+* TypeScript — Apache-2.0 — https://github.com/microsoft/TypeScript
+  Dev dependency, not bundled.
+
+================================================================================
+Transitive LGPL notice
+================================================================================
+
+The @huggingface/transformers dependency tree may pull in `sharp` (a Node.js
+image-processing library) which dynamically links libvips
+(@img/sharp-libvips-*, LGPL-3.0-or-later).
+
+PIPER itself does NOT use the sharp / libvips pipeline at runtime: the WASM
+embedder runs ONNX models directly and never invokes the image-processing
+path. The transitive dependency exists only because npm/bun resolve the full
+graph at install time.
+
+LGPL-3.0-or-later permits dynamic linking from a permissively-licensed work
+without imposing copyleft on the wider distribution, provided the LGPL
+component remains replaceable and its source is available. The libvips source
+is available at: https://github.com/libvips/libvips
+
+If your downstream use case requires a strict no-LGPL posture, you can:
+1. Build PIPER without WASM embedding support (set embedding_backend=none or
+   http in credentials.json).
+2. Use `npm install --omit=optional` / `bun install --omit-optional` to skip
+   the sharp binary platform packages.
+
+================================================================================

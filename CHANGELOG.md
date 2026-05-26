@@ -1,0 +1,262 @@
+# Changelog
+
+All notable changes to PIPER are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
+
+## [Unreleased]
+
+### Added — TUI / UX
+
+- Status bar moved to the bottom of the screen with: alien mascot `Y(◉ ◉)Y`
+  color-cycling green / cyan / magenta / yellow while PIPER thinks, session
+  title, running session cost (USD), current model id, OpenRouter remaining
+  credit (live-fetched every 60s), token meter `N/limit (%)` with progress
+  bar driven by the real `gpt-tokenizer` count, and a HUMAN/YOLO mode badge.
+- **HUMAN / YOLO modes**, toggle with `Shift+Tab`. HUMAN asks for approval
+  per planned step; YOLO auto-approves read-tier only. `mutate` and
+  `destructive` tiers still always prompt, every time — the destructive gate
+  is unaffected by mode.
+- **`Ctrl+O`** collapses reasoning: hides agent-event lines (plan/gather/
+  verify noise) from future turns, leaves user prompts and final answers
+  visible.
+- **`<Static>` scrollback persistence** (`src/tui/Chat.tsx`): full
+  conversation history stays in the terminal's native scrollback, like
+  Claude Code. Final answers stream line-by-line, append-only — no redraw.
+- Final answer is **conversational chat-style** prose, not a "Findings /
+  Gaps / Next steps" report. Inline `[ev-N]` citations preserved.
+- **Soft verifier**: report passes if ≥75% of substantive lines are cited
+  (was 100%); conclusion-style lines ("Non c'è …", "Nothing to flag", "If
+  you want …") are exempted.
+- **Best-of retry**: if a synthesis retry produces a worse answer than the
+  original, surface the original.
+- **Final-only default**: `maxFollowupIterations=0`. One prompt = one
+  answer; ask a follow-up if you want more (no auto-iteration loop).
+
+### Added — knowledge base / RAG
+
+- In-process semantic memory layer over PGlite + pgvector, supporting
+  knowledge kinds: `runbook`, `adr`, `session-summary`, `solved-case`,
+  `note`.
+- **Three embedding backends**, user-selectable on first run via interactive
+  picker (and re-prompted if missing from credentials):
+  - `wasm` (default, recommended): `@huggingface/transformers` running
+    `Xenova/multilingual-e5-small` (384-dim, 94 languages, ~120 MB
+    downloaded once then fully offline). Implementation:
+    `src/rag/wasm-embedding-client.ts`. Lazy-loaded; cached at
+    `~/.piper/cache/models/` so the compiled binary stays lean.
+  - `http`: OpenAI-compatible local endpoint (Ollama `nomic-embed-text`
+    768-dim, LM Studio, llama.cpp, vLLM).
+  - `openrouter`: paid cloud embeddings — only offered if an API key is
+    present, never auto-selected.
+  - `none`: disables RAG entirely; `memory.search` returns empty.
+- Choice persisted as `embedding_backend` in `~/.piper/credentials.json`;
+  `PIPER_EMBEDDING_BACKEND` env var overrides.
+- **Schema auto-migration on dimension mismatch**: switching e.g. from
+  Ollama 768-dim to WASM 384-dim drops the vector table and rebuilds from
+  source.
+- **`memory.search` catalog action**: in-process (no shell, no SSH) action
+  the planner calls to semantically search the knowledge base. The planner
+  system prompt directs the agent to call it first for known incident
+  patterns, deploy procedures, or hosts with prior session notes.
+
+### Added — sessions and lifecycle
+
+- **PGlite persistent storage by default** at `~/.piper/data/pglite/`
+  (previously in-memory; sessions were lost on exit). Override with
+  `PIPER_DATA_DIR`; force ephemeral with `PIPER_EPHEMERAL=1`.
+- **Auto-generated session titles** via a small LLM call on the first user
+  prompt; visible in the status bar and `/resume` picker.
+- **Auto-saved reports**: every `done` writes the final answer to
+  `~/.piper/data/reports/{sessionId}/run-{ts}.md`.
+- **Resume**: `bun dev -- --resume` flag at startup (before the banner)
+  opens the picker, and `/resume` does the same mid-session.
+- **Token-aware auto-compaction**: triggers when the planner's context
+  exceeds 70% of the model's `maxContextTokens` minus a 4k output reserve,
+  measured with the real `gpt-tokenizer` cl100k_base encoder. Pending-
+  message fallback at 12+ regular messages. Older turns roll into one
+  summary message; the N most recent stay verbatim.
+
+### Added — catalog
+
+The read-tier catalog grew from 17 to 30+ actions. New entries:
+
+- **git**: `git.status`, `git.log`.
+- **Docker**: `docker.compose_ps`.
+- **Network**: `network.dns_lookup`.
+- **Kubernetes**: `kubernetes.get`, `kubernetes.logs`, `kubernetes.describe`,
+  `kubernetes.top_pod`, `kubernetes.events`, `kubernetes.context_current`.
+- **GitHub** (`gh` CLI): `github.pr_list`, `github.pr_view`,
+  `github.run_list`, `github.run_view`, `github.issue_list`.
+- **AWS**: `aws.s3_ls`, `aws.ec2_describe`, `aws.cloudwatch_tail`,
+  `aws.rds_describe`.
+- **GCP**: `gcp.compute_list`, `gcp.logging_read`.
+- **Azure**: `azure.vm_list`.
+- **System extras**: `system.cpu_info`, `system.cron_list`,
+  `system.systemctl_list`, `system.iptables_list`, `system.dmesg`,
+  `system.package_list`.
+- **Database**: `postgres.pg_isready`.
+- **Memory**: `memory.search` (in-process).
+
+### Added — interactive pickers
+
+- **`/model`** — interactive mid-session model picker
+  (`src/tui/ModelPicker.tsx`) with two tabs:
+  - **Local**: auto-detected Ollama / LM Studio / llama.cpp / vLLM servers
+    and their available models.
+  - **OpenRouter**: full filtered catalog from `/api/v1/models` — paid only,
+    tool-calling only, moderated providers only, with PgUp/PgDn paging and
+    inline text filter.
+  - Selection persists to `~/.piper/credentials.json` for next run.
+- **`/memory`** (aliases `/mem`, `/rag`) — knowledge-base viewer
+  (`src/tui/MemoryViewer.tsx`) with two tabs:
+  - **Overview**: counts per kind (runbook / adr / session-summary /
+    solved-case / note).
+  - **Sources**: per-file list; press `d` to delete a source.
+- **`/resume`** — picker over recent sessions showing title, age, and
+  message count; selecting reloads chat history into the scrollback.
+
+### Changed — defaults and behaviour
+
+- PIPER data is now persistent by default (`~/.piper/data/pglite/`). The
+  previous in-memory default silently lost sessions; it remains available
+  via `PIPER_EPHEMERAL=1`.
+- Follow-up iteration loop disabled by default (`maxFollowupIterations=0`).
+- Verifier strictness softened to 75% citation coverage on substantive
+  lines, with conclusion-line exemption.
+
+### Fixed
+
+- **Cost meter showed `$0.0000`** even on real OpenRouter calls. The pricing
+  lookup was using `client.id` (which carries the provider prefix) instead
+  of `client.modelId` (the bare model id used in OpenRouter's pricing
+  table). Now correctly resolves and accumulates per-call cost.
+
+### Open-source hardening
+
+- `LICENSE` finalised as Apache-2.0.
+- `NOTICE` file added: Apache-2.0 transitive disclosures plus the LGPL
+  transitive disclosure for `@img/sharp-libvips` (pulled in by the
+  embedding pipeline).
+- `license-checker` wired into CI; GPL transitive deps are rejected.
+- Test suite: **388 unit + gate tests passing** (was 318 in the previous
+  changelog entry).
+
+## [0.1.0] — 2026-05-25
+
+First public M1 release. Read-only diagnostics, conversational TUI, deterministic
+gate.
+
+### Added — security gate
+
+- Catalog + Executor: every external command goes through one audited surface;
+  the LLM cannot emit free-form shell.
+- `HARD_PATH_DENYLIST` (12 patterns): blocks reads of SSH private keys,
+  AWS/GCP/kube credentials, GnuPG, `.netrc`, `~/.piper/`,
+  `.env*`, bare `id_rsa`/`id_ed25519`/etc.
+- Secret scrubber with 13 pattern families: PEM private keys, JWT, AWS/OpenAI/
+  Anthropic/OpenRouter/GitHub/Slack tokens, `Authorization` headers, DB connection
+  strings, kv-secret heuristics, env-var heuristics. Two-pass: write-time
+  (audit log + evidence) AND pre-LLM (model client).
+- Args secret-refuse: the Executor rejects a proposed action whose args contain
+  a recognisable secret (defends against laundering through tool calls).
+- Three-tier permission model (`read | mutate | destructive`). M1 ships `read`
+  only; `mutate` and `destructive` are explicitly refused by default.
+- One-module-per-credential discipline: SSH keys live only in `src/exec/ssh.ts`;
+  provider API keys live only in `src/models/client.ts`.
+
+### Added — agent pipeline
+
+- Plain async generator runner (`src/agent/runner.ts`): `plan → gather →
+  synthesize → verify → propose → approve → loop` with explicit AgentEvent stream.
+- Plan node: LLM-driven, emits structured tool calls validated against the
+  catalog schema.
+- Gather node: parallel `Promise.all` execution via the Executor; per-step
+  failures don't abort the run.
+- Synthesize node: streamed markdown report with inline `[ev-N]` citations.
+- Verify node: deterministic — every substantive line in `## Findings` must
+  cite a real evidence id; section-aware (`## Gaps`, `## Next steps` exempt).
+- Propose node: separate LLM call with tools wired (fixes role confusion seen
+  on smaller models that otherwise emit preambles instead of reports).
+- Inline JSON fallback: parses follow-up proposals from a trailing ```json
+  code block when a model doesn't reliably use `tool_calls`.
+- Conversation history persisted to PGlite; planner sees the last 6 turns
+  verbatim → multi-turn continuity ("ora controlla la memoria").
+- Follow-up proposal loop with explicit human approval per iteration, max 2
+  iterations by default, configurable per session.
+
+### Added — TUI (Ink)
+
+- Streaming live report in the chat history.
+- Multi-turn entries scroll naturally (no fixed "last report" slot).
+- Bordered input panel — clear visual identity for where you type.
+- Slash commands: `/env add|list|remove`, `/help`, `/save`, `/quit`.
+- Proposals panel: numbered list with `y / n / 1,3 / q` shortcuts.
+
+### Added — first-run experience
+
+- Interactive wizard auto-runs if `~/.piper/credentials.json` is missing AND no
+  env vars provide the minimum config.
+- Detects local LLM providers (Ollama, LM Studio, llama.cpp, vLLM) by probing
+  standard ports.
+- OpenRouter tier picker (Featherweight / Economy / Balanced / Premium) with
+  current per-million-token pricing inline.
+- Writes the credentials file with mode `0600`, dir mode `0700`.
+- API-key shape validator: silently ignores garbage env vars (e.g. leftover
+  `PIPER_API_KEY=ciao` from a test session).
+
+### Added — builtin read actions
+
+`ssh.connect`, `system.uptime`, `system.os_info`, `system.memory`,
+`system.disk_usage`, `system.process_list`, `system.list_dir`,
+`system.file_stat`, `network.connections`, `network.port_check`, `network.ping`,
+`logs.tail`, `service.status`, `service.journal`, `docker.ps`, `docker.logs`,
+`docker.inspect` — 17 actions total. Each with a Zod-validated argsSchema, argv
+construction (no shell concatenation), and a result parser.
+
+### Added — environments registry
+
+- PGlite-backed registry: `name`, `host`, `ssh_user`, optional `port`,
+  `identity_file`, `description`, `tags`.
+- LLM-facing description (`describeForLLM`) → planner sees only registered
+  environments.
+- SSH allowlist by construction: an action with an `environment` arg can only
+  resolve to a registered entry; unknown names are refused with
+  `environment-not-found`.
+
+### Added — cost layer
+
+- Unified OpenAI-compatible `ModelClient` over OpenRouter, Ollama, LM Studio,
+  llama.cpp, vLLM, and custom endpoints.
+- `provider.data_collection: 'deny'` enforced on every OpenRouter request.
+- Pre-call cost estimation (per-million-token table) with visibility threshold.
+- Per-session budget guard with hard-stop `BudgetExceededError`.
+- Local-tier models record zero cost; usage tokens still tracked.
+
+### Added — testing
+
+- 318 unit + gate tests, 0 fail (Vitest-style under Bun).
+- 10 E2E tests via `bun run e2e` against an Alpine sshd Docker fixture with
+  pinned host keys and generated test keypair.
+- Two-pass typecheck (`tsc --noEmit`, strict + `noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes`).
+
+### Added — distribution
+
+- Single-binary build via `bun build --compile` (~76 MB Mach-O arm64 / Linux ELF).
+- PostgreSQL WASM (~13 MB) and Yoga layout engine embedded.
+- Boot in ~150 ms cold from the compiled binary.
+
+### Known limitations (M1)
+
+- No mutations (M2). Catalog refuses `mutate` and `destructive` by default.
+- No RAG / pgvector yet (M4). Runbooks are not retrievable; the planner relies
+  on the per-turn evidence + recent conversation.
+- No history compaction yet. Long sessions push older turns out of the 6-turn
+  planner window — they remain in PGlite, just not in the next prompt.
+- Custom OpenAI-compatible endpoint flow is partial in the wizard; edit
+  `~/.piper/credentials.json` by hand for now.
+
+[0.1.0]: https://github.com/<your-org>/piper/releases/tag/v0.1.0

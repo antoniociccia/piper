@@ -1,0 +1,15 @@
+
+  ____ ___ ____  _____ ____    ____  _____ __  __  ___
+ |  _ \_ _|  _ \| ____|  _ \  |  _ \| ____|  \/  |/ _ \
+ | |_) | || |_) |  _| | |_) | | | | |  _| | |\/| | | | |
+ |  __/| ||  __/| |___|  _ <  | |_| | |___| |  | | |_| |
+ |_|  |___|_|   |_____|_| \_\ |____/|_____|_|  |_|\___/
+
+ app-host-01 — generic application host (PIPER demo)
+ Debian GNU/Linux 12 (bookworm) · kernel 6.1.0-21-amd64
+
+ app dir:  /opt/orderly
+ logs:     /var/log/orderly/app.log, /var/log/nginx/access.log
+
+ This is a PIPER demo host. Anything you do here is observed by an agent.
+

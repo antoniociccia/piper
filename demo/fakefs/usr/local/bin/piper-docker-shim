@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# ============================================================================
+# piper-docker-shim — DEMO STUB ONLY. NOT DOCKER.
+# ============================================================================
+#
+# This script is a static-output emulator that mimics the SHAPE of `docker`'s
+# read-only subcommands (`ps`, `logs`, `inspect`, `compose ps`) so PIPER can
+# be demonstrated against a host that "looks like" a Docker-based deployment
+# without bringing up a real Docker daemon inside the demo container.
+#
+# It does NOT contain any Docker source code, does NOT manage any containers,
+# does NOT exec any Docker engine. It prints fabricated, hard-coded strings.
+# Coverage is ~50 lines per subcommand.
+#
+# "Docker" and the Docker whale logo are trademarks of Docker, Inc.
+# This shim does NOT use the Docker name or logo as marketing or branding —
+# the file name is "piper-docker-shim". The shim is installed in the demo
+# container at /usr/local/bin/piper-docker-shim with a symlink at
+# /usr/local/bin/docker so PIPER's catalog (which invokes `docker ps` etc.)
+# resolves correctly. This is a nominative-fair-use shim for compatibility,
+# not an emulation of Docker functionality or behaviour beyond surface text.
+#
+# If you are looking for the real Docker, see https://www.docker.com/.
+#
+# License: Apache-2.0 (part of the PIPER repository).
+# ============================================================================
+#
+# Planted demo anomalies (so PIPER has something to discover):
+#   - orderly-web-1       — Up 3 days, the web tier
+#   - orderly-nginx-1     — Up 3 days, the reverse proxy
+#   - orderly-worker-1    — Exited (1) 3 hours ago
+#   - orderly-redis-1     — Exited (137) 4 hours ago (OOM — ROOT CAUSE of the
+#                                                     worker death)
+
+set -u
+
+# --- inspect helpers --------------------------------------------------------
+
+print_ps_running() {
+  cat <<'EOF'
+CONTAINER ID   IMAGE                   COMMAND                  CREATED       STATUS         PORTS                   NAMES
+a1b2c3d4e5f6   orderly-web:latest      "node dist/server.js"    3 days ago    Up 3 days      0.0.0.0:8080->8080/tcp  orderly-web-1
+b2c3d4e5f6a1   nginx:1.27              "nginx -g 'daemon ..."   3 days ago    Up 3 days      0.0.0.0:80->80/tcp      orderly-nginx-1
+EOF
+}
+
+print_ps_all() {
+  cat <<'EOF'
+CONTAINER ID   IMAGE                   COMMAND                  CREATED       STATUS                    PORTS                   NAMES
+a1b2c3d4e5f6   orderly-web:latest      "node dist/server.js"    3 days ago    Up 3 days                 0.0.0.0:8080->8080/tcp  orderly-web-1
+b2c3d4e5f6a1   nginx:1.27              "nginx -g 'daemon ..."   3 days ago    Up 3 days                 0.0.0.0:80->80/tcp      orderly-nginx-1
+c3d4e5f6a1b2   orderly-worker:latest   "node dist/worker.js"    3 days ago    Exited (1) 3 hours ago                            orderly-worker-1
+d4e5f6a1b2c3   redis:7-alpine          "docker-entrypoint.s..." 3 days ago    Exited (137) 4 hours ago                          orderly-redis-1
+EOF
+}
+
+print_logs_web() {
+  cat <<'EOF'
+2026-05-26T11:02:04.121Z [info]  orderly-web booted on :8080
+2026-05-26T11:02:04.456Z [info]  config loaded from /etc/orderly/config.yml
+2026-05-26T11:02:04.701Z [info]  redis pool initialising (target redis:6379)
+2026-05-26T11:02:09.812Z [warn]  redis connect attempt 1 failed: ECONNREFUSED
+2026-05-26T11:02:14.815Z [warn]  redis connect attempt 2 failed: ECONNREFUSED
+2026-05-26T11:02:19.819Z [warn]  redis connect attempt 3 failed: ECONNREFUSED — entering degraded read-only mode
+2026-05-26T11:30:00.001Z [info]  serving HTTP requests, cache backend = degraded
+2026-05-26T14:01:55.502Z [warn]  GET /api/dashboard fell back to cold-load path (no cache)
+EOF
+}
+
+print_logs_worker() {
+  cat <<'EOF'
+2026-05-26T10:58:01.012Z [info]  orderly-worker booting
+2026-05-26T10:58:01.244Z [info]  config loaded, will attach to redis at redis:6379
+2026-05-26T10:58:06.301Z [error] redis attach failed: connect ECONNREFUSED 127.0.0.1:6379
+2026-05-26T10:58:06.302Z [fatal] cannot operate without cache; exiting with code 1
+2026-05-26T10:58:06.310Z [info]  process exiting
+EOF
+}
+
+print_logs_nginx() {
+  cat <<'EOF'
+2026-05-26T11:00:00.000Z notice: nginx/1.27 starting
+2026-05-26T11:00:00.014Z notice: using the "epoll" event method
+2026-05-26T11:00:00.015Z notice: worker process started
+EOF
+}
+
+print_logs_redis() {
+  cat <<'EOF'
+2026-05-23T11:00:00.000Z 1:M Redis 7.2.4 (00000000) starting
+2026-05-26T07:14:31.502Z 1:M oom-killer: memory cgroup out of memory
+2026-05-26T07:14:31.503Z 1:M aborting with exit code 137
+EOF
+}
+
+print_inspect() {
+  local name="$1"
+  case "$name" in
+    orderly-web-1|orderly-nginx-1)
+      cat <<EOF
+[
+  {
+    "Id": "$(echo -n $name | md5sum 2>/dev/null | head -c 12 || echo abcdef012345)abcdef0",
+    "Name": "/$name",
+    "State": { "Status": "running", "Running": true, "ExitCode": 0, "StartedAt": "2026-05-23T11:02:04Z" },
+    "Config": { "Image": "${name%-*}:latest", "Labels": {
+      "com.docker.compose.project": "orderly",
+      "com.docker.compose.service": "${name%-*-1}"
+    }},
+    "HostConfig": { "RestartPolicy": { "Name": "unless-stopped" } }
+  }
+]
+EOF
+      ;;
+    orderly-worker-1)
+      cat <<EOF
+[
+  {
+    "Id": "c3d4e5f6a1b2",
+    "Name": "/orderly-worker-1",
+    "State": { "Status": "exited", "Running": false, "ExitCode": 1, "FinishedAt": "2026-05-26T10:58:06Z" },
+    "Config": { "Image": "orderly-worker:latest" }
+  }
+]
+EOF
+      ;;
+    orderly-redis-1)
+      cat <<EOF
+[
+  {
+    "Id": "d4e5f6a1b2c3",
+    "Name": "/orderly-redis-1",
+    "State": { "Status": "exited", "Running": false, "ExitCode": 137, "FinishedAt": "2026-05-26T07:14:31Z" },
+    "Config": { "Image": "redis:7-alpine" }
+  }
+]
+EOF
+      ;;
+    *)
+      echo "Error: No such object: $name" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# --- subcommand dispatch -----------------------------------------------------
+
+case "${1:-}" in
+  ps)
+    shift
+    if [[ "${1:-}" == "-a" || "${1:-}" == "--all" ]]; then
+      print_ps_all
+    else
+      print_ps_running
+    fi
+    exit 0
+    ;;
+  logs)
+    shift
+    # ignore --tail N and --since X args — content is fake anyway
+    target=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --tail|--since|-n) shift 2 ;;
+        --tail=*|--since=*) shift ;;
+        -*) shift ;;
+        *) target="$1"; shift ;;
+      esac
+    done
+    case "$target" in
+      orderly-web-1)    print_logs_web ;;
+      orderly-worker-1) print_logs_worker ;;
+      orderly-nginx-1)  print_logs_nginx ;;
+      orderly-redis-1)  print_logs_redis ;;
+      "") echo 'Error: "docker logs" requires exactly 1 argument.' >&2; exit 1 ;;
+      *)  echo "Error: No such container: $target" >&2; exit 1 ;;
+    esac
+    exit 0
+    ;;
+  inspect)
+    shift
+    if [[ $# -lt 1 ]]; then
+      echo 'Error: "docker inspect" requires at least 1 argument.' >&2
+      exit 1
+    fi
+    print_inspect "$1"
+    exit 0
+    ;;
+  compose)
+    # docker compose ps is implemented by ignoring -f <path> and pretending the
+    # project is "orderly".
+    shift
+    project_arg=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -f|--file) shift 2 ;;
+        ps) break ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "${1:-}" == "ps" ]]; then
+      cat <<'EOF'
+NAME                COMMAND                  SERVICE     STATUS         PORTS
+orderly-web-1       "node dist/server.js"    web         running        0.0.0.0:8080->8080/tcp
+orderly-nginx-1     "nginx -g 'daemon ..."   nginx       running        0.0.0.0:80->80/tcp
+orderly-worker-1    "node dist/worker.js"    worker      exited (1)
+orderly-redis-1     "docker-entrypoint.s..." redis       exited (137)
+EOF
+      exit 0
+    fi
+    echo "Unsupported docker compose subcommand in the demo stub." >&2
+    exit 2
+    ;;
+  version|--version|-v)
+    echo "Docker version 26.1.4 (demo stub)"
+    exit 0
+    ;;
+  "")
+    echo "Usage: docker [OPTIONS] COMMAND"
+    exit 1
+    ;;
+  *)
+    echo "Error: unsupported docker subcommand in the demo stub: $1" >&2
+    exit 2
+    ;;
+esac

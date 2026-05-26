@@ -1,0 +1,10 @@
+services:
+  demo-host:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: piper-demo-host
+    hostname: trading-prod-01
+    ports:
+      - "2222:22"
+    restart: "no"

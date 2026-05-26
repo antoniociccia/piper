@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [main, develop, staging]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs history
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ">=1.2.0"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (strict)
+        run: bun run typecheck
+
+      - name: Tests (unit + gate)
+        run: bun test
+
+      - name: Build single binary
+        run: bun run build
+
+      - name: Smoke check binary
+        run: |
+          test -x ./dist/piper
+          ls -lah ./dist/piper
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  license-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ">=1.2.0"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: License check (no GPL except documented LGPL transitive)
+        run: |
+          # Allowed licenses for direct + transitive deps.
+          # LGPL-3.0-or-later is exclusively from @img/sharp-libvips-* (transitive
+          # of @huggingface/transformers) and is dynamically-linked / replaceable.
+          # Documented in NOTICE.
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          npx --yes license-checker \
+            --excludePackages "${PKG_NAME}@${PKG_VERSION}" \
+            --onlyAllow "Apache-2.0;MIT;BSD-3-Clause;BSD-2-Clause;ISC;CC0-1.0;CC-BY-4.0;CC-BY-3.0;Python-2.0;Unlicense;0BSD;BlueOak-1.0.0;LGPL-3.0-or-later;Apache-2.0 WITH LLVM-exception" \
+            > licenses-report.txt
+          echo "License check passed."
+
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses-report
+          path: licenses-report.txt
+          retention-days: 30

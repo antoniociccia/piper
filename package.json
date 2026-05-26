@@ -1,0 +1,59 @@
+{
+  "name": "piper",
+  "version": "0.1.0",
+  "description": "Pipeline Intelligence, Provisioning, Error-handling & Releases — terminal-first LLM-driven DevOps copilot",
+  "license": "Apache-2.0",
+  "author": "Antonio Ciccia + The Piper Contributors",
+  "keywords": [
+    "devops",
+    "cli",
+    "llm",
+    "ai",
+    "agent",
+    "diagnostic",
+    "ssh",
+    "kubernetes",
+    "docker",
+    "deterministic",
+    "ink",
+    "terminal"
+  ],
+  "homepage": "https://github.com/antoniociccia/piper#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/antoniociccia/piper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/antoniociccia/piper/issues"
+  },
+  "private": true,
+  "type": "module",
+  "module": "src/index.tsx",
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build --compile --target=bun --outfile=dist/piper src/index.tsx",
+    "spike": "bun run build && ./dist/piper",
+    "demo": "bun run scripts/demo.ts",
+    "e2e:up": "bash scripts/e2e-setup.sh",
+    "e2e:down": "bash scripts/e2e-teardown.sh",
+    "e2e": "bash scripts/e2e-setup.sh && PIPER_E2E=1 bun test tests/e2e/ ; rc=$? ; bash scripts/e2e-teardown.sh ; exit $rc"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@huggingface/transformers": "^4.2.0",
+    "gpt-tokenizer": "^3.4.0",
+    "ink": "^5.0.1",
+    "react": "^18.3.1",
+    "react-devtools-core": "^7.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/react": "^18.3.12",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  }
+}
