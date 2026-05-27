@@ -9,6 +9,7 @@ import { awsS3Ls } from './aws-s3-ls.ts';
 import { azVmList } from './az-vm-list.ts';
 // Docker
 import { dockerComposePs } from './docker-compose-ps.ts';
+import { dockerComposeUp } from './docker-compose-up.ts';
 import { dockerInspect } from './docker-inspect.ts';
 import { dockerLogs } from './docker-logs.ts';
 import { dockerPs } from './docker-ps.ts';
@@ -88,11 +89,13 @@ export const BUILTIN_ACTIONS = [
   // Services (systemd)
   serviceStatus,
   serviceJournal,
-  // Docker
+  // Docker (read)
   dockerPs,
   dockerLogs,
   dockerInspect,
   dockerComposePs,
+  // Docker (mutate — M2)
+  dockerComposeUp,
   // Git
   gitStatus,
   gitLog,
@@ -135,6 +138,7 @@ export { awsRdsDescribe } from './aws-rds-describe.ts';
 export { awsS3Ls } from './aws-s3-ls.ts';
 export { azVmList } from './az-vm-list.ts';
 export { dockerComposePs } from './docker-compose-ps.ts';
+export { dockerComposeUp } from './docker-compose-up.ts';
 export { dockerInspect } from './docker-inspect.ts';
 export { dockerLogs } from './docker-logs.ts';
 export { dockerPs } from './docker-ps.ts';

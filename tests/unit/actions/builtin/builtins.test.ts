@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   BUILTIN_ACTIONS,
+  dockerComposeUp,
   dockerPs,
   logsTail,
   networkPortCheck,
@@ -52,9 +53,31 @@ describe('actions/builtin — catalog registration', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  test('every builtin action is tier=read', () => {
+  test('builtin tier mix: read-only + a small, explicit mutate set', () => {
+    // M2 introduces mutate-tier actions one by one. Every entry that lands
+    // here must be reviewed for: dry-run hook present, verify hook present,
+    // rollback hook present (or documented as unrecoverable). This list is
+    // the auditable surface — if a new mutate action shows up in the
+    // catalog without being added here, this test fails on purpose.
+    const KNOWN_MUTATE: readonly string[] = ['docker.compose_up'];
+    const KNOWN_DESTRUCTIVE: readonly string[] = [];
+
     for (const action of BUILTIN_ACTIONS) {
-      expect(action.tier).toBe('read');
+      if (action.tier === 'read') continue;
+      if (action.tier === 'mutate') {
+        expect(
+          KNOWN_MUTATE.includes(action.name),
+          `mutate action "${action.name}" must be added to KNOWN_MUTATE and reviewed for dry-run/verify/rollback hooks`,
+        ).toBe(true);
+        // Sanity: mutate actions should at least preview before applying.
+        expect(action.buildDryRunCommand, `${action.name} should declare a dry-run`).toBeDefined();
+        continue;
+      }
+      if (action.tier === 'destructive') {
+        expect(KNOWN_DESTRUCTIVE.includes(action.name)).toBe(true);
+        continue;
+      }
+      throw new Error(`unknown tier on action ${action.name}`);
     }
   });
 });
@@ -279,5 +302,69 @@ describe('actions/builtin — docker.ps', () => {
     expect(containers).toHaveLength(2);
     expect(containers[0]?.id).toBe('abc');
     expect(containers[1]?.state).toBe('exited');
+  });
+});
+
+describe('actions/builtin — docker.compose_up (mutate tier)', () => {
+  const baseArgs = {
+    environment: 'staging',
+    project_dir: '/opt/orderly',
+  } as const;
+
+  test('declares tier=mutate, not read', () => {
+    expect(dockerComposeUp.tier).toBe('mutate');
+  });
+
+  test('snapshot command captures current ps JSON (read-only)', () => {
+    const argv = dockerComposeUp.buildSnapshotCommand!(baseArgs, ctx);
+    expectSshHeader(argv);
+    const joined = argv.join(' ');
+    expect(joined).toContain('docker compose -f /opt/orderly/docker-compose.yml ps --format json --all');
+  });
+
+  test('dry-run command uses `compose config` (universal, read-only)', () => {
+    const argv = dockerComposeUp.buildDryRunCommand!(baseArgs, ctx);
+    expectSshHeader(argv);
+    const joined = argv.join(' ');
+    expect(joined).toContain('docker compose -f /opt/orderly/docker-compose.yml config');
+  });
+
+  test('execute command uses `up -d --remove-orphans` and stays in detached mode', () => {
+    const argv = dockerComposeUp.buildCommand(baseArgs, ctx);
+    expectSshHeader(argv);
+    const joined = argv.join(' ');
+    expect(joined).toContain('docker compose -f /opt/orderly/docker-compose.yml up -d --remove-orphans');
+  });
+
+  test('verify command re-reads ps to confirm services are running', () => {
+    const argv = dockerComposeUp.buildVerifyCommand!(baseArgs, ctx);
+    expectSshHeader(argv);
+    const joined = argv.join(' ');
+    expect(joined).toContain('docker compose -f /opt/orderly/docker-compose.yml ps --format json');
+  });
+
+  test('rollback command brings the project down (conservative MVP)', () => {
+    const rollback = dockerComposeUp.buildRollbackCommand!(baseArgs, ctx, '');
+    expect(rollback).not.toBeNull();
+    const joined = (rollback as readonly string[]).join(' ');
+    expect(joined).toContain('docker compose -f /opt/orderly/docker-compose.yml down');
+  });
+
+  test('per-service variant scopes every step to that single service', () => {
+    const args = { ...baseArgs, service: 'web' };
+    expect(dockerComposeUp.buildCommand(args, ctx).join(' ')).toContain(' up -d --remove-orphans web');
+    expect(dockerComposeUp.buildVerifyCommand!(args, ctx).join(' ')).toContain(' ps --format json web');
+    const rb = dockerComposeUp.buildRollbackCommand!(args, ctx, '');
+    expect((rb as readonly string[]).join(' ')).toContain(' down web');
+  });
+
+  test('argsSchema rejects project_dir with shell metacharacters', () => {
+    expect(dockerComposeUp.argsSchema.safeParse({ ...baseArgs, project_dir: '/opt/orderly; rm -rf /' }).success).toBe(false);
+    expect(dockerComposeUp.argsSchema.safeParse({ ...baseArgs, project_dir: '/opt/orderly && reboot' }).success).toBe(false);
+  });
+
+  test('argsSchema rejects service names with shell metacharacters', () => {
+    expect(dockerComposeUp.argsSchema.safeParse({ ...baseArgs, service: 'web;ls' }).success).toBe(false);
+    expect(dockerComposeUp.argsSchema.safeParse({ ...baseArgs, service: 'web bar' }).success).toBe(false);
   });
 });
