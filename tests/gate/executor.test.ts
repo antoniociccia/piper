@@ -6,7 +6,10 @@ import { createCatalog, type Catalog } from '../../src/actions/catalog.ts';
 import type { Action, Tier } from '../../src/actions/types.ts';
 import { createEnvironmentRegistry, type EnvironmentRegistry } from '../../src/environments/registry.ts';
 import { createExecutor, type Executor } from '../../src/exec/executor.ts';
-import { ExecError } from '../../src/exec/types.ts';
+import {
+  ExecError,
+  type MutationApprovalCallback,
+} from '../../src/exec/types.ts';
 import { closeDb, openDb } from '../../src/memory/db.ts';
 
 interface Setup {
@@ -17,6 +20,7 @@ interface Setup {
   readonly sessionId: string;
   readonly makeExecutor: (overrides?: {
     allowedTiers?: readonly Tier[];
+    onMutationProposal?: MutationApprovalCallback;
   }) => Executor;
 }
 
@@ -47,6 +51,9 @@ async function setupTest(): Promise<Setup> {
         catalog,
         registry,
         ...(overrides?.allowedTiers === undefined ? {} : { allowedTiers: overrides.allowedTiers }),
+        ...(overrides?.onMutationProposal === undefined
+          ? {}
+          : { onMutationProposal: overrides.onMutationProposal }),
       }),
   };
   active = setup;
@@ -132,6 +139,29 @@ const echoSecretLiteral: Action<Record<string, never>, string> = {
   buildCommand: () => ['echo', 'leaked sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAA tail'],
   parseResult: (raw) => raw.stdout,
 };
+
+// Full-flow mutate fixture: every hook is wired and produces a known string,
+// so the tests can assert which step ran (snapshot/dryrun/exec/verify/rollback)
+// by inspecting the audit log and the result.mutation meta. `verifyShouldFail`
+// flips the verify hook to exit 1, exercising the rollback path.
+function makeMutateFixture(opts: { verifyShouldFail: boolean; tier?: 'mutate' | 'destructive' } = {
+  verifyShouldFail: false,
+}): Action<{ key: string }, string> {
+  return {
+    name: opts.tier === 'destructive' ? 'fake.destructive_full' : 'fake.mutate_full',
+    tier: opts.tier ?? 'mutate',
+    description: 'full-flow mutate fixture with snapshot/dryrun/verify/rollback',
+    argsSchema: z.object({ key: z.string() }),
+    buildSnapshotCommand: (args) => ['echo', `snapshot:${args.key}`],
+    buildDryRunCommand: (args) => ['echo', `dryrun:${args.key}`],
+    buildCommand: (args) => ['echo', `exec:${args.key}`],
+    buildVerifyCommand: opts.verifyShouldFail
+      ? () => ['sh', '-c', 'exit 1']
+      : (args) => ['echo', `verify:${args.key}`],
+    buildRollbackCommand: (args) => ['echo', `rollback:${args.key}`],
+    parseResult: (raw) => raw.stdout,
+  };
+}
 
 describe('exec/executor — refusals', () => {
   test('unknown action is refused with reason unknown-action', async () => {
@@ -372,5 +402,170 @@ describe('exec/executor — audit-log invariants', () => {
     );
     const serialized = JSON.stringify(audit.rows[0]?.args_scrubbed_json ?? null);
     expect(serialized).not.toContain('sk-ant-api03');
+  });
+});
+
+describe('exec/executor — mutation HITL flow (M2)', () => {
+  test('mutate action with no approval callback is refused with mutation-no-approval', async () => {
+    const { catalog, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture();
+    catalog.register(fixture);
+    const executor = makeExecutor(); // no onMutationProposal
+
+    let caught: unknown;
+    try {
+      await executor.exec(fixture.name, { key: 'a' }, { sessionId });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ExecError);
+    expect((caught as ExecError).reason).toBe('mutation-no-approval');
+  });
+
+  test('mutate action rejected by user surfaces mutation-rejected and runs neither execute nor verify', async () => {
+    const { catalog, db, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture();
+    catalog.register(fixture);
+    const executor = makeExecutor({
+      onMutationProposal: async () => ({ kind: 'reject', reason: 'no thanks' }),
+    });
+
+    let caught: unknown;
+    try {
+      await executor.exec(fixture.name, { key: 'a' }, { sessionId });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ExecError);
+    expect((caught as ExecError).reason).toBe('mutation-rejected');
+
+    const kinds = await db.query<{ kind: string }>(
+      `SELECT kind FROM audit_log WHERE session_id = $1 ORDER BY id`,
+      [sessionId],
+    );
+    const kindList = kinds.rows.map((r) => r.kind);
+    expect(kindList).toContain('mutate-snapshot');
+    expect(kindList).toContain('mutate-dryrun');
+    expect(kindList).toContain('mutate-proposed');
+    expect(kindList).toContain('mutate-rejected');
+    expect(kindList).not.toContain('mutate-execute');
+    expect(kindList).not.toContain('mutate-verify');
+    expect(kindList).not.toContain('mutate-rollback');
+  });
+
+  test('approval callback receives scrubbed command + dry-run + snapshot output', async () => {
+    const { catalog, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture();
+    catalog.register(fixture);
+
+    const captured: { proposal?: unknown } = {};
+    const executor = makeExecutor({
+      onMutationProposal: async (proposal) => {
+        captured.proposal = proposal;
+        return { kind: 'reject' };
+      },
+    });
+
+    try {
+      await executor.exec(fixture.name, { key: 'banana' }, { sessionId });
+    } catch {
+      // rejected — expected
+    }
+
+    const p = captured.proposal as {
+      actionName: string;
+      tier: string;
+      commandScrubbed: string;
+      snapshotOutput?: string;
+      dryRunOutput?: string;
+    };
+    expect(p.actionName).toBe(fixture.name);
+    expect(p.tier).toBe('mutate');
+    expect(p.commandScrubbed).toContain('exec:banana');
+    expect(p.snapshotOutput).toContain('snapshot:banana');
+    expect(p.dryRunOutput).toContain('dryrun:banana');
+  });
+
+  test('mutate approved + verify OK: execute runs, no rollback, no remembered flag for approve-once', async () => {
+    const { catalog, db, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture();
+    catalog.register(fixture);
+    const executor = makeExecutor({
+      onMutationProposal: async () => ({ kind: 'approve-once' }),
+    });
+
+    const result = await executor.exec(fixture.name, { key: 'x' }, { sessionId });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('exec:x');
+    expect(result.mutation?.rolledBack).toBe(false);
+    expect(result.mutation?.remembered).toBe(false);
+    expect(result.mutation?.verifyExitCode).toBe(0);
+
+    const kinds = await db.query<{ kind: string }>(
+      `SELECT kind FROM audit_log WHERE session_id = $1 ORDER BY id`,
+      [sessionId],
+    );
+    const kindList = kinds.rows.map((r) => r.kind);
+    expect(kindList).toEqual([
+      'mutate-snapshot',
+      'mutate-dryrun',
+      'mutate-proposed',
+      'mutate-execute',
+      'mutate-verify',
+    ]);
+  });
+
+  test('mutate approved + verify FAILS: rollback fires, ExecError reason=verify-failed, mutation.rolledBack=true', async () => {
+    const { catalog, db, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture({ verifyShouldFail: true });
+    catalog.register(fixture);
+    const executor = makeExecutor({
+      onMutationProposal: async () => ({ kind: 'approve-once' }),
+    });
+
+    let caught: unknown;
+    try {
+      await executor.exec(fixture.name, { key: 'x' }, { sessionId });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ExecError);
+    expect((caught as ExecError).reason).toBe('verify-failed');
+    expect(((caught as ExecError).details as { rolledBack?: boolean }).rolledBack).toBe(true);
+
+    const kinds = await db.query<{ kind: string }>(
+      `SELECT kind FROM audit_log WHERE session_id = $1 ORDER BY id`,
+      [sessionId],
+    );
+    const kindList = kinds.rows.map((r) => r.kind);
+    expect(kindList).toContain('mutate-execute');
+    expect(kindList).toContain('mutate-verify');
+    expect(kindList).toContain('mutate-rollback');
+  });
+
+  test('mutate approve-remember: mutation.remembered=true on tier=mutate', async () => {
+    const { catalog, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture();
+    catalog.register(fixture);
+    const executor = makeExecutor({
+      onMutationProposal: async () => ({ kind: 'approve-remember' }),
+    });
+
+    const result = await executor.exec(fixture.name, { key: 'x' }, { sessionId });
+    expect(result.mutation?.remembered).toBe(true);
+  });
+
+  test('destructive approve-remember is downgraded to approve-once (never remembered)', async () => {
+    const { catalog, sessionId, makeExecutor } = await setupTest();
+    const fixture = makeMutateFixture({ verifyShouldFail: false, tier: 'destructive' });
+    catalog.register(fixture);
+    const executor = makeExecutor({
+      onMutationProposal: async () => ({ kind: 'approve-remember' }),
+    });
+
+    const result = await executor.exec(fixture.name, { key: 'x' }, { sessionId });
+    // remembered MUST stay false for destructive — this is the central
+    // safety property of the three-tier permission model.
+    expect(result.mutation?.remembered).toBe(false);
   });
 });

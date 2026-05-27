@@ -6,6 +6,30 @@ export interface Migration {
   readonly up: string;
 }
 
+/**
+ * Audit-log kinds. Every row in audit_log MUST be one of these. The
+ * constraint lives in SQL — keep this TS list and the SQL CHECK in sync.
+ *
+ *   exec                — successful or failed read-tier execution
+ *   refuse              — gate/policy rejected the action before exec
+ *   error               — unexpected internal error during exec
+ *   mutate-snapshot     — pre-execute state capture (read-only)
+ *   mutate-dryrun       — pre-execute preview (read-only)
+ *   mutate-proposed     — proposal shown to the user, awaiting approval
+ *   mutate-rejected     — user declined the proposal
+ *   mutate-execute      — approved mutation actually ran
+ *   mutate-verify       — post-execute verification (read-only)
+ *   mutate-rollback     — undo invoked after a failed verify
+ */
+export const AUDIT_KINDS = [
+  'exec', 'refuse', 'error',
+  'mutate-snapshot', 'mutate-dryrun', 'mutate-proposed',
+  'mutate-rejected', 'mutate-execute', 'mutate-verify',
+  'mutate-rollback',
+] as const;
+export type AuditKind = (typeof AUDIT_KINDS)[number];
+const AUDIT_KIND_SQL_LIST = AUDIT_KINDS.map((k) => `'${k}'`).join(', ');
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -27,7 +51,7 @@ export const MIGRATIONS: readonly Migration[] = [
         id                   BIGSERIAL   PRIMARY KEY,
         session_id           TEXT        NOT NULL REFERENCES sessions(id),
         ts                   TIMESTAMPTZ NOT NULL DEFAULT now(),
-        kind                 TEXT        NOT NULL CHECK (kind IN ('exec', 'refuse', 'error')),
+        kind                 TEXT        NOT NULL CHECK (kind IN (${AUDIT_KIND_SQL_LIST})),
         action_name          TEXT        NOT NULL,
         args_scrubbed_json   JSONB       NOT NULL,
         command_scrubbed     TEXT,
