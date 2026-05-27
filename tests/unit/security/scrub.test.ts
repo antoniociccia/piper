@@ -72,11 +72,14 @@ const POSITIVES: readonly Positive[] = [
   { name: 'bearer header lowercase', input: 'authorization: Bearer XYZ123_token', kind: 'bearer-token' },
   { name: 'Basic auth header', input: 'Authorization: Basic dXNlcjpwYXNzd29yZA==', kind: 'basic-auth' },
 
-  // Connection strings (4)
-  { name: 'Postgres conn-string', input: 'DATABASE_URL=postgresql://alice:hunter2@db.internal:5432/prod', kind: 'connection-string' },
-  { name: 'MySQL conn-string', input: 'use mysql://root:rootpw@127.0.0.1:3306/app', kind: 'connection-string' },
-  { name: 'MongoDB conn-string', input: 'mongodb://admin:s3cret@cluster0.mongodb.net/?retryWrites=true', kind: 'connection-string' },
-  { name: 'Redis conn-string', input: 'redis://default:redispass@redis.internal:6379', kind: 'connection-string' },
+  // Connection strings (4) — hosts use RFC 2606 reserved TLDs (.example,
+  // .invalid, .test) so platform-side secret scanners (GitHub, gitleaks,
+  // etc.) don't false-positive on them. The pattern under test is the
+  // proto://user:pass@host shape, the host's TLD is irrelevant.
+  { name: 'Postgres conn-string', input: 'DATABASE_URL=postgresql://alice:pw1@db.example:5432/prod', kind: 'connection-string' },
+  { name: 'MySQL conn-string', input: 'use mysql://root:pw2@db.example:3306/app', kind: 'connection-string' },
+  { name: 'MongoDB conn-string', input: 'mongodb://admin:pw3@cluster.example/?retryWrites=true', kind: 'connection-string' },
+  { name: 'Redis conn-string', input: 'redis://default:pw4@db.example:6379', kind: 'connection-string' },
 
   // KV secrets (5)
   { name: 'password kv =', input: 'password=hunter2', kind: 'kv-secret' },
@@ -142,8 +145,8 @@ describe('security/scrub — structural guarantees', () => {
   });
 
   test('preserves scheme and user while redacting only the password in conn strings', () => {
-    const scrubbed = scrubText('postgresql://alice:hunter2@db:5432/app');
-    expect(scrubbed).toBe('postgresql://alice:[REDACTED:connection-string]@db:5432/app');
+    const scrubbed = scrubText('postgresql://alice:pw1@db.example:5432/app');
+    expect(scrubbed).toBe('postgresql://alice:[REDACTED:connection-string]@db.example:5432/app');
   });
 
   test('anthropic key matched before generic openai key', () => {
