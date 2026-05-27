@@ -51,7 +51,7 @@ export const MIGRATIONS: readonly Migration[] = [
         id                   BIGSERIAL   PRIMARY KEY,
         session_id           TEXT        NOT NULL REFERENCES sessions(id),
         ts                   TIMESTAMPTZ NOT NULL DEFAULT now(),
-        kind                 TEXT        NOT NULL CHECK (kind IN (${AUDIT_KIND_SQL_LIST})),
+        kind                 TEXT        NOT NULL CHECK (kind IN ('exec', 'refuse', 'error')),
         action_name          TEXT        NOT NULL,
         args_scrubbed_json   JSONB       NOT NULL,
         command_scrubbed     TEXT,
@@ -146,6 +146,20 @@ export const MIGRATIONS: readonly Migration[] = [
       -- Compaction looks up the most recent summary per session.
       CREATE INDEX chat_messages_session_kind_id
         ON chat_messages (session_id, kind, id);
+    `,
+  },
+  {
+    version: 2,
+    name: 'audit-log-mutation-kinds',
+    // Extends audit_log.kind to cover the mutation HITL flow (M2):
+    // mutate-{snapshot,dryrun,proposed,rejected,execute,verify,rollback}.
+    // Existing rows (kind='exec'|'refuse'|'error') stay valid. Idempotent:
+    // DROP CONSTRAINT IF EXISTS handles both the v1-old and v1-new cases.
+    up: `
+      ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_kind_check;
+      ALTER TABLE audit_log
+        ADD CONSTRAINT audit_log_kind_check
+        CHECK (kind IN (${AUDIT_KIND_SQL_LIST}));
     `,
   },
 ];
