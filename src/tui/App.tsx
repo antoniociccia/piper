@@ -19,6 +19,11 @@ import {
   InvalidEnvironmentError,
 } from '../environments/types.ts';
 import type { Executor } from '../exec/executor.ts';
+import type {
+  MutationApprovalCallback,
+  MutationDecision,
+  MutationProposal,
+} from '../exec/types.ts';
 import type { Logger } from '../logging/logger.ts';
 import type { ChatHistory } from '../memory/chat-history.ts';
 import type { SessionsRepo } from '../memory/sessions.ts';
@@ -35,6 +40,7 @@ import { Help } from './Help.tsx';
 import { parseSlashCommand, slashCompletions, type SlashCommand } from './commands.ts';
 import { MemoryViewer } from './MemoryViewer.tsx';
 import { ModelPicker, type ModelSelection } from './ModelPicker.tsx';
+import { MutationApprovalPanel } from './MutationApprovalPanel.tsx';
 import { Proposals } from './Proposals.tsx';
 import { Report } from './Report.tsx';
 import { SessionPicker } from './SessionPicker.tsx';
@@ -65,12 +71,24 @@ export interface AppDeps {
    */
   readonly onSwitchModel?: (sel: ModelSelection) => Promise<ModelClient | null>;
   readonly openrouterApiKey?: string;
+  /**
+   * Called once on mount with a callback the OUTER world (the executor) can
+   * use to ask the user to approve a proposed mutation. Wiring lives in
+   * src/index.tsx — the executor's `onMutationProposal` dep proxies into
+   * this callback so the prompt renders in the TUI.
+   */
+  readonly registerMutationApprover?: (cb: MutationApprovalCallback) => void;
 }
 
 interface PendingApproval {
   readonly proposals: readonly ProposedStep[];
   readonly iteration: number;
   readonly resolve: (decision: ProposalDecision) => void;
+}
+
+interface PendingMutation {
+  readonly proposal: MutationProposal;
+  readonly resolve: (decision: MutationDecision) => void;
 }
 
 type ExecutionMode = 'human' | 'yolo';
@@ -105,6 +123,7 @@ interface State {
   /** True while a stream is active. */
   streamingActive: boolean;
   pendingApproval?: PendingApproval;
+  pendingMutation?: PendingMutation;
 }
 
 type Action =
@@ -136,7 +155,9 @@ type Action =
   | { type: 'replace-entries'; entries: ChatEntry[] }
   | { type: 'commit-final-report'; entry: ChatEntry }
   | { type: 'pending-approval'; approval: PendingApproval }
-  | { type: 'clear-approval' };
+  | { type: 'clear-approval' }
+  | { type: 'pending-mutation'; mutation: PendingMutation }
+  | { type: 'clear-mutation' };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -246,6 +267,13 @@ function reducer(state: State, action: Action): State {
       // typing session starts with that stale character in the prompt box.
       const next = { ...state, input: '' };
       delete next.pendingApproval;
+      return next;
+    }
+    case 'pending-mutation':
+      return { ...state, pendingMutation: action.mutation, input: '' };
+    case 'clear-mutation': {
+      const next = { ...state, input: '' };
+      delete next.pendingMutation;
       return next;
     }
     default:
@@ -430,6 +458,22 @@ export function App(deps: AppDeps): JSX.Element {
   useEffect(() => {
     runnerRef.current = null;
   }, [currentSessionId]);
+
+  // Mount-time wiring: hand the outer world (src/index.tsx, which built the
+  // Executor) a callback it can invoke whenever a mutation needs human
+  // approval. Our implementation dispatches a `pending-mutation` state and
+  // returns a Promise that resolves when the user presses a/r/n in the TUI.
+  // Registered once — the bridge ref in index.tsx stays alive for the
+  // lifetime of the App.
+  useEffect(() => {
+    if (deps.registerMutationApprover === undefined) return;
+    deps.registerMutationApprover((proposal) => {
+      return new Promise<MutationDecision>((resolve) => {
+        dispatch({ type: 'pending-mutation', mutation: { proposal, resolve } });
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleResume = useCallback(
     async (newSessionId: SessionId): Promise<void> => {
@@ -832,6 +876,15 @@ export function App(deps: AppDeps): JSX.Element {
     [state.pendingApproval],
   );
 
+  const resolveMutation = useCallback(
+    (decision: MutationDecision) => {
+      if (state.pendingMutation === undefined) return;
+      state.pendingMutation.resolve(decision);
+      dispatch({ type: 'clear-mutation' });
+    },
+    [state.pendingMutation],
+  );
+
   useInput((input, key) => {
     if (state.showHelp) {
       dispatch({ type: 'set-help', show: false });
@@ -867,6 +920,39 @@ export function App(deps: AppDeps): JSX.Element {
     // delivers each key to ALL active subscribers, so we have to opt out
     // explicitly here.)
     if (state.showModelPicker || state.showSessionPicker || state.showMemoryViewer) {
+      return;
+    }
+    // Mutation approval mode: a single mutation proposal is on screen and
+    // the user must say a/r/n. ESC and Ctrl+C count as reject. We hold the
+    // input buffer hostage — typing other characters does nothing — because
+    // any stray keystroke during this prompt could trigger a deploy and
+    // that's exactly what the gate is here to prevent.
+    if (state.pendingMutation !== undefined) {
+      if (key.ctrl && input === 'c') {
+        resolveMutation({ kind: 'reject', reason: 'Ctrl+C' });
+        return;
+      }
+      if (key.escape) {
+        resolveMutation({ kind: 'reject', reason: 'Esc' });
+        return;
+      }
+      const ch = input.toLowerCase();
+      if (ch === 'a' || ch === 'y') {
+        resolveMutation({ kind: 'approve-once' });
+        return;
+      }
+      if (ch === 'r' && state.pendingMutation.proposal.tier === 'mutate') {
+        // 'r' = approve & remember per env. Destructive can NEVER be
+        // remembered — for that tier the executor downgrades to once
+        // anyway, but we don't even surface the option in the panel.
+        resolveMutation({ kind: 'approve-remember' });
+        return;
+      }
+      if (ch === 'n') {
+        resolveMutation({ kind: 'reject', reason: 'user pressed n' });
+        return;
+      }
+      // Everything else: ignored on purpose. No buffer mutation, no fallthrough.
       return;
     }
     if (state.pendingApproval !== undefined) {
@@ -1086,12 +1172,18 @@ export function App(deps: AppDeps): JSX.Element {
         />
       )}
 
+      {state.pendingMutation !== undefined && (
+        <MutationApprovalPanel proposal={state.pendingMutation.proposal} />
+      )}
+
       {state.entries.length === 0 &&
         !state.streamingActive &&
         !state.busy &&
-        state.pendingApproval === undefined && <Banner />}
+        state.pendingApproval === undefined &&
+        state.pendingMutation === undefined && <Banner />}
 
       {state.pendingApproval === undefined &&
+        state.pendingMutation === undefined &&
         !state.showModelPicker &&
         !state.showSessionPicker &&
         !state.showMemoryViewer && (

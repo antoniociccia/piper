@@ -6,6 +6,7 @@ import { readPiperCredentials, defaultCredentialsPath } from './config/credentia
 import { ENV_VARS, readEnv } from './config/env-vars.ts';
 import { createEnvironmentRegistry } from './environments/registry.ts';
 import { createExecutor } from './exec/executor.ts';
+import type { MutationApprovalCallback } from './exec/types.ts';
 import { createLogger } from './logging/logger.ts';
 import { createChatHistory } from './memory/chat-history.ts';
 import { closeDb, openDb } from './memory/db.ts';
@@ -386,12 +387,26 @@ async function main(): Promise<void> {
     }
   }
 
+  // Mutation approval bridge. The Executor is created here, before the App
+  // mounts. The App's `registerMutationApprover` (called from a useEffect)
+  // hands us its own callback, which we slot into this mutable holder. The
+  // executor delegates every mutation proposal to that callback. Until the
+  // App registers (or after it unmounts), the holder stays null and any
+  // mutate/destructive attempt is rejected with a clear message.
+  let mutationApprovalCb: MutationApprovalCallback | null = null;
+
   const executor = createExecutor({
     db,
     catalog,
     registry,
     logger,
     ...(embedder === null ? {} : { embedder }),
+    onMutationProposal: async (proposal) => {
+      if (mutationApprovalCb === null) {
+        return { kind: 'reject', reason: 'TUI not ready to approve mutations' };
+      }
+      return mutationApprovalCb(proposal);
+    },
   });
   const costTracker = createCostTracker({
     db,
@@ -475,6 +490,9 @@ async function main(): Promise<void> {
         ? {}
         : { maxFollowupIterations: cfg.maxFollowupIterations })}
       onSwitchModel={onSwitchModel}
+      registerMutationApprover={(cb) => {
+        mutationApprovalCb = cb;
+      }}
       {...(cfg.apiKey === undefined ? {} : { openrouterApiKey: cfg.apiKey })}
       {...(resumedTitle === null ? {} : { initialTitle: resumedTitle })}
     />,

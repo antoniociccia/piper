@@ -24,11 +24,14 @@ describe('synthesizer prompt — anti-mutation contract (Prime Directive)', () =
   });
 });
 
-describe('planner prompt — read-only contract (M1)', () => {
-  test('explicitly forbids destructive actions and lists the verbs', () => {
-    expect(PLANNER_SYSTEM).toContain('No destructive actions');
-    expect(PLANNER_SYSTEM).toMatch(/deletes\s*\/\s*removes\s*\/\s*drops/i);
-    expect(PLANNER_SYSTEM).toMatch(/shuts down\s*\/\s*stops\s*\/\s*kills/i);
+describe('planner prompt — tier discipline', () => {
+  test('destructive requires explicit user intent (not speculative)', () => {
+    expect(PLANNER_SYSTEM).toMatch(/destructive-tier proposals unless the user EXPLICITLY asked/i);
+    expect(PLANNER_SYSTEM).toMatch(/Destructive can never be\s+remembered/i);
+  });
+
+  test('mutations need clear user intent to change state', () => {
+    expect(PLANNER_SYSTEM).toMatch(/Mutations \(tier: mutate\) require a clear user intent/i);
   });
 
   test('refuses secret reads at the planning layer', () => {
@@ -39,10 +42,10 @@ describe('planner prompt — read-only contract (M1)', () => {
   });
 });
 
-describe('proposer prompt — read-only follow-ups only (M1)', () => {
-  test('only proposes read-tier actions, never destructive', () => {
+describe('proposer prompt — never proposes mutations', () => {
+  test('only read-tier actions; mutate/destructive are out of scope for follow-ups', () => {
     expect(PROPOSER_SYSTEM).toMatch(/Read-tier actions only/i);
-    expect(PROPOSER_SYSTEM).toMatch(/delete\s*\/\s*drop\s*\/\s*stop\s*\/\s*kill\s*\/\s*wipe/i);
+    expect(PROPOSER_SYSTEM).toMatch(/NEVER suggests a mutate\s+or destructive tool/i);
   });
 
   test('blocks credential exfiltration via action args', () => {
