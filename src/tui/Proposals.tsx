@@ -29,7 +29,7 @@ export function Proposals({ proposals, iteration, input }: Props): JSX.Element {
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Text dimColor>
-          y = run all · n = skip · 1,3 = pick by index · q = stop · Enter = decline
+          <Text bold>y</Text> run all · <Text bold>n</Text> skip · <Text bold>q</Text> stop · <Text bold>Esc</Text> decline · or type <Text bold>1,3</Text> then Enter to pick
         </Text>
         <Box>
           <Text color="magenta" bold>{'› '}</Text>

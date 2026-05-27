@@ -956,9 +956,14 @@ export function App(deps: AppDeps): JSX.Element {
       return;
     }
     if (state.pendingApproval !== undefined) {
-      // Approval mode: capture decision keys / pick-list / enter to decline.
+      // Approval mode: single-key shortcuts when the buffer is empty + the
+      // classic "compose 1,3 + Enter" path for picklist selections.
       if (key.ctrl && input === 'c') {
         resolveApproval({ acceptedIndices: [], stop: true });
+        return;
+      }
+      if (key.escape) {
+        resolveApproval({ acceptedIndices: [], stop: false });
         return;
       }
       if (key.return) {
@@ -970,6 +975,32 @@ export function App(deps: AppDeps): JSX.Element {
       if (key.backspace || key.delete) {
         dispatch({ type: 'backspace' });
         return;
+      }
+      // Single-key shortcuts — only when the user hasn't started composing a
+      // picklist. The moment a digit/comma/space goes in we know they're
+      // typing "1,3" or similar, so we fall through to the buffer path
+      // and wait for Enter. This matches the MutationApprovalPanel UX:
+      // y/a/n/q resolve instantly, no Enter needed.
+      if (state.input === '' && !key.ctrl && !key.meta) {
+        const ch = input.toLowerCase();
+        if (ch === 'y' || ch === 'a') {
+          resolveApproval({
+            acceptedIndices: Array.from(
+              { length: state.pendingApproval.proposals.length },
+              (_, i) => i,
+            ),
+            stop: false,
+          });
+          return;
+        }
+        if (ch === 'n') {
+          resolveApproval({ acceptedIndices: [], stop: false });
+          return;
+        }
+        if (ch === 'q') {
+          resolveApproval({ acceptedIndices: [], stop: true });
+          return;
+        }
       }
       if (input !== '' && !key.ctrl && !key.meta) {
         dispatch({ type: 'append-input', ch: input });
