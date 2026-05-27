@@ -58,10 +58,21 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Cross-compile (${{ matrix.target }})
+        # `onnxruntime-node` and `sharp` ship platform-specific native
+        # bindings that only exist for the install host, so they can't be
+        # cross-bundled into a darwin binary from a Linux runner. We mark
+        # them external — at runtime, @huggingface/transformers detects
+        # they're missing and falls back to onnxruntime-web (WASM), which
+        # IS bundled and is platform-agnostic. Same WASM stack we already
+        # rely on for PGlite, so the trade is consistent: slightly slower
+        # inference, fully portable single binary.
         run: |
           mkdir -p dist
           bun build --compile \
             --target=${{ matrix.target }} \
+            --external onnxruntime-node \
+            --external sharp \
+            --external '@img/sharp-*' \
             --outfile=dist/${{ matrix.asset }} \
             src/index.tsx
 
