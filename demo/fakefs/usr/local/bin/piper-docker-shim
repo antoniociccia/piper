@@ -187,29 +187,92 @@ case "${1:-}" in
     exit 0
     ;;
   compose)
-    # docker compose ps is implemented by ignoring -f <path> and pretending the
-    # project is "orderly".
+    # Demo stub for the docker.compose_up M2 flow:
+    #   config              → renders the merged compose file (read-only)
+    #   ps                  → pretty-printed table (existing behaviour)
+    #   ps --format json    → JSON, one row per line, for snapshot/verify
+    #   up [-d] [--remove-orphans] [service]   → fakes a successful redeploy
+    #   down [service]      → fakes a graceful stop
+    # We deliberately ignore -f <path> so any project_dir works.
     shift
-    project_arg=""
+    json_format=0
+    all_flag=0
+    detach_flag=0
+    remove_orphans_flag=0
+    positional=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         -f|--file) shift 2 ;;
-        ps) break ;;
-        *) shift ;;
+        --format) json_format=$([[ "$2" == "json" ]] && echo 1 || echo 0); shift 2 ;;
+        --all) all_flag=1; shift ;;
+        -d|--detach) detach_flag=1; shift ;;
+        --remove-orphans) remove_orphans_flag=1; shift ;;
+        *) positional+=("$1"); shift ;;
       esac
     done
-    if [[ "${1:-}" == "ps" ]]; then
-      cat <<'EOF'
+    sub="${positional[0]:-}"
+    service="${positional[1]:-}"
+
+    case "$sub" in
+      config)
+        # Print the live compose file from /opt/orderly so it doubles as a
+        # plausible merged-view diff in the approval panel.
+        cat /opt/orderly/docker-compose.yml
+        exit 0
+        ;;
+      ps)
+        if [[ "$json_format" -eq 1 ]]; then
+          # JSON lines — matches `docker compose ps --format json` v2.
+          cat <<'EOF'
+{"Name":"orderly-web-1","Service":"web","Image":"registry.example/orderly-web:1.4.2","State":"running","Status":"Up 3 days"}
+{"Name":"orderly-nginx-1","Service":"nginx","Image":"nginx:1.27-alpine","State":"running","Status":"Up 3 days"}
+{"Name":"orderly-worker-1","Service":"worker","Image":"registry.example/orderly-worker:1.4.2","State":"exited","Status":"Exited (1) 4 hours ago"}
+{"Name":"orderly-redis-1","Service":"redis","Image":"redis:7.4-alpine","State":"exited","Status":"Exited (137) 4 hours ago"}
+EOF
+          exit 0
+        fi
+        cat <<'EOF'
 NAME                COMMAND                  SERVICE     STATUS         PORTS
 orderly-web-1       "node dist/server.js"    web         running        0.0.0.0:8080->8080/tcp
 orderly-nginx-1     "nginx -g 'daemon ..."   nginx       running        0.0.0.0:80->80/tcp
 orderly-worker-1    "node dist/worker.js"    worker      exited (1)
 orderly-redis-1     "docker-entrypoint.s..." redis       exited (137)
 EOF
-      exit 0
-    fi
-    echo "Unsupported docker compose subcommand in the demo stub." >&2
-    exit 2
+        exit 0
+        ;;
+      up)
+        # Simulate a redeploy. If a service is given, scope output to it.
+        if [[ -n "$service" ]]; then
+          echo " ✔ Container orderly-${service}-1  Started"
+        else
+          echo " ✔ Network orderly_default       Created"
+          echo " ✔ Container orderly-redis-1     Started"
+          echo " ✔ Container orderly-db-1        Started"
+          echo " ✔ Container orderly-web-1       Started"
+          echo " ✔ Container orderly-worker-1    Started"
+          echo " ✔ Container orderly-nginx-1     Started"
+        fi
+        exit 0
+        ;;
+      down)
+        if [[ -n "$service" ]]; then
+          echo " ✔ Container orderly-${service}-1  Stopped"
+          echo " ✔ Container orderly-${service}-1  Removed"
+        else
+          echo " ✔ Container orderly-nginx-1     Stopped"
+          echo " ✔ Container orderly-worker-1    Stopped"
+          echo " ✔ Container orderly-web-1       Stopped"
+          echo " ✔ Container orderly-db-1        Stopped"
+          echo " ✔ Container orderly-redis-1     Stopped"
+          echo " ✔ Network orderly_default       Removed"
+        fi
+        exit 0
+        ;;
+      *)
+        echo "Unsupported docker compose subcommand in the demo stub: $sub" >&2
+        exit 2
+        ;;
+    esac
     ;;
   version|--version|-v)
     echo "Docker version 26.1.4 (demo stub)"

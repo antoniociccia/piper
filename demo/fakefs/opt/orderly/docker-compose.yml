@@ -1,0 +1,38 @@
+# Demo compose file — what /opt/orderly looks like on the fake "Orderly"
+# production host. PIPER's docker.compose_up action targets this file when
+# the user asks for a redeploy. The shim renders plausible output for
+# `config`, `up`, `down`, and `ps --format json` so the M2 HITL flow
+# (snapshot → dry-run → approve → execute → verify → rollback) lights up
+# all the way through without needing a real Docker daemon inside the
+# already-containerised demo host.
+services:
+  web:
+    image: registry.example/orderly-web:1.4.2
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://orderly:orderly@db:5432/orderly
+    depends_on:
+      - redis
+      - db
+  worker:
+    image: registry.example/orderly-worker:1.4.2
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    depends_on:
+      - web
+  redis:
+    image: redis:7.4-alpine
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: orderly
+      POSTGRES_PASSWORD: orderly
+      POSTGRES_DB: orderly
