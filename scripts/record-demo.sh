@@ -60,15 +60,18 @@ cat <<'EOF'
   Once PIPER opens, type EACH prompt and wait for the reply to finish before
   moving on. Take your time — asciinema will compress idle gaps later.
 
-  Prompt order:
+  Prompt order — analyze → propose → redeploy (the M2 money shot):
 
     1.  /env add demo deploy@localhost:2222 --key demo/keys/piper-demo
     2.  analyze demo
-    3.  the config declares a worker, but is it actually running?
-    4.  what fix would you propose? don't execute anything, I just want to understand
-    5.  summarize in a table: host specs, anomalies found, things to handle
-    6.  /memory                  (press Esc when done viewing)
-    7.  /quit
+    3.  the worker is exited and redis OOM'd — restart the stack
+        (planner proposes 'docker.compose_up'; HUMAN approval panel appears)
+        → press 'y' on the plan-approval panel
+        → MAGENTA MUTATION PANEL appears with verbatim command, dry-run
+          diff (compose config), pre-state snapshot, and the [a]/[r]/[n] row
+        → press 'a' (approve once) — execute + verify run, services come back
+    4.  /memory                  (press Esc / Enter / q when done viewing)
+    5.  /quit
 
   Tip: don't worry about typos — re-run the script to redo the take.
   Tip: terminal recommended size 120×32 — wider feels cinematic, ≥32 rows

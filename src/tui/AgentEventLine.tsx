@@ -123,13 +123,22 @@ export function AgentEventLine({ event, tick, live = true, debug = false }: Prop
             ))}
         </Box>
       );
-    case 'proposals-ready':
+    case 'proposals-ready': {
+      // iteration=0 is the initial plan awaiting approveSteps; iteration>=1
+      // is a follow-up from the proposer. The label needs to disambiguate
+      // or the user reads "follow-up" for what is actually their first
+      // plan-approval prompt.
+      const noun = event.iteration === 0
+        ? (event.proposals.length === 1 ? 'plan step' : 'plan steps')
+        : (event.proposals.length === 1 ? 'follow-up' : 'follow-ups');
+      const verb = event.iteration === 0 ? 'pending approval' : 'proposed';
       return (
         <Text color="magenta">
-          {`  ${event.proposals.length} follow-up${event.proposals.length === 1 ? '' : 's'} proposed`}
+          {`  ${event.proposals.length} ${noun} ${verb}`}
           {debug ? ` (iter ${event.iteration})` : ''}
         </Text>
       );
+    }
     case 'compaction-applied':
       return (
         <Text color="gray">
