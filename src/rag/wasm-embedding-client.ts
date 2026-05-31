@@ -1,6 +1,14 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import onnxRuntimeWasmPath from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm' with { type: 'file' };
+// `with { type: 'file' }` tells Bun to bundle the .mjs as a static asset and
+// return its path. TypeScript can't model that assertion and resolves the .mjs
+// as a real JS module with no declarations — suppress that one error narrowly.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-expect-error -- .mjs imported as a file asset, not as a JS module
+import onnxRuntimeMjsPath from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs' with { type: 'file' };
+
 import type { EmbeddingClient } from './embedding-client.ts';
 
 /**
@@ -33,10 +41,25 @@ interface HFExtractor {
   }>;
 }
 
+interface OnnxWasmFlags {
+  wasmPaths?: string | { wasm?: string; mjs?: string };
+  numThreads?: number;
+  proxy?: boolean;
+}
+
+interface OnnxBackend {
+  wasm?: OnnxWasmFlags;
+}
+
+interface HFBackends {
+  onnx?: OnnxBackend;
+}
+
 interface HFEnv {
   cacheDir: string;
   allowRemoteModels: boolean;
   allowLocalModels: boolean;
+  backends?: HFBackends;
 }
 
 interface HFModule {
@@ -63,12 +86,31 @@ export async function createWasmEmbeddingClient(
   const dimension = opts.dimension ?? DEFAULT_WASM_DIMENSION;
   const cacheDir = opts.cacheDir ?? join(homedir(), '.piper', 'cache', 'models');
 
-  // Lazy-load the heavy library so importing this module is cheap when WASM
-  // mode isn't actually used.
-  const mod = (await import('@huggingface/transformers')) as unknown as HFModule;
+  // Import the web build explicitly. The default entry uses conditional
+  // exports and, in a Node-like runtime (Bun included), resolves to the build
+  // that requires `onnxruntime-node` — a native binding that cannot be
+  // embedded in a `bun build --compile` artifact. The web build uses
+  // `onnxruntime-web` (WASM), which we ship as bundled assets below.
+  const mod = (await import(
+    '../../node_modules/@huggingface/transformers/dist/transformers.web.js'
+  )) as unknown as HFModule;
   mod.env.cacheDir = cacheDir;
   mod.env.allowRemoteModels = true;
-  mod.env.allowLocalModels = true;
+  // Keep transformers.js from probing its default `localModelPath` (`/models/`)
+  // — in the compiled binary that path doesn't exist and the fetch fails with
+  // "URL is invalid" before we ever get to the remote fetch.
+  mod.env.allowLocalModels = false;
+
+  // Point the ONNX WASM runtime at the assets we embedded. Without this the
+  // compiled binary would try to fetch them from a CDN at runtime, defeating
+  // the offline guarantee.
+  const backends = (mod.env.backends ??= {});
+  const onnx = (backends.onnx ??= {});
+  onnx.wasm = {
+    ...(onnx.wasm ?? {}),
+    wasmPaths: { wasm: onnxRuntimeWasmPath, mjs: onnxRuntimeMjsPath },
+    numThreads: 1,
+  };
 
   const extractor = await mod.pipeline('feature-extraction', modelId, {
     dtype: 'q8',

@@ -1,6 +1,6 @@
 {
   "name": "piper",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Pipeline Intelligence, Provisioning, Error-handling & Releases — terminal-first LLM-driven DevOps copilot",
   "license": "Apache-2.0",
   "author": "Antonio Ciccia + The Piper Contributors",
@@ -32,7 +32,7 @@
   "scripts": {
     "dev": "bun run src/index.tsx",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile --target=bun --external onnxruntime-node --external sharp --external '@img/sharp-*' --outfile=dist/piper src/index.tsx",
+    "build": "bun build --compile --target=bun --external sharp --external '@img/sharp-*' --outfile=dist/piper src/index.tsx",
     "spike": "bun run build && ./dist/piper",
     "demo": "bun run scripts/demo.ts",
     "e2e:up": "bash scripts/e2e-setup.sh",

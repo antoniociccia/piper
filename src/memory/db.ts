@@ -1,12 +1,61 @@
-import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { PGlite } from '@electric-sql/pglite';
 import { vector } from '@electric-sql/pglite/vector';
 import postgresWasmPath from '../../node_modules/@electric-sql/pglite/dist/postgres.wasm' with { type: 'file' };
 import postgresDataPath from '../../node_modules/@electric-sql/pglite/dist/postgres.data' with { type: 'file' };
+import vectorBundlePath from '../../node_modules/@electric-sql/pglite/dist/vector.tar.gz' with { type: 'file' };
 
 import { runMigrations } from './migrations.ts';
+
+// `bun build --compile` embeds assets inside a virtual FS (`/$bunfs/root/...`).
+// `Bun.file()` and `fs.existsSync` can see those paths, but `fs.createReadStream`
+// — which PGlite uses to read the gzipped extension bundle — cannot. Materialise
+// the bundle on a real filesystem path the first time it's needed, then point
+// the extension's `bundlePath` at the real path.
+let cachedRealBundlePath: string | null = null;
+
+async function materialiseVectorBundle(): Promise<string> {
+  if (cachedRealBundlePath !== null) return cachedRealBundlePath;
+  const cacheRoot = process.env['PIPER_CACHE_DIR'] ?? join(homedir(), '.piper', 'cache', 'extensions');
+  let target = join(cacheRoot, 'vector.tar.gz');
+  try {
+    await mkdir(cacheRoot, { recursive: true });
+  } catch {
+    // Fall back to OS tmpdir if home isn't writable (CI, locked-down envs).
+    const fallbackRoot = join(tmpdir(), 'piper', 'extensions');
+    await mkdir(fallbackRoot, { recursive: true });
+    target = join(fallbackRoot, 'vector.tar.gz');
+  }
+  const bytes = await Bun.file(vectorBundlePath).arrayBuffer();
+  let needsWrite = true;
+  try {
+    const existing = await stat(target);
+    if (existing.size === bytes.byteLength) needsWrite = false;
+  } catch {
+    // not present
+  }
+  if (needsWrite) await writeFile(target, new Uint8Array(bytes));
+  cachedRealBundlePath = target;
+  return target;
+}
+
+type VectorSetup = typeof vector.setup;
+type EmscriptenOpts = Parameters<VectorSetup>[1];
+
+const bundledVector = {
+  name: vector.name,
+  async setup(pg: Parameters<VectorSetup>[0], emscriptenOpts: EmscriptenOpts) {
+    const upstream = await vector.setup(pg, emscriptenOpts);
+    const realPath = await materialiseVectorBundle();
+    return {
+      ...upstream,
+      bundlePath: new URL(`file://${realPath}`),
+    };
+  },
+} satisfies typeof vector;
 
 export type DbStorage =
   | { kind: 'memory' }
@@ -59,8 +108,8 @@ export async function openDb(options: OpenDbOptions = {}): Promise<PGlite> {
   }
 
   const db = dataDir === undefined
-    ? new PGlite({ wasmModule, fsBundle, extensions: { vector } })
-    : new PGlite({ dataDir, wasmModule, fsBundle, extensions: { vector } });
+    ? new PGlite({ wasmModule, fsBundle, extensions: { vector: bundledVector } })
+    : new PGlite({ dataDir, wasmModule, fsBundle, extensions: { vector: bundledVector } });
 
   await db.waitReady;
   await runMigrations(db);
