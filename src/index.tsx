@@ -23,6 +23,10 @@ import { LOCAL_EMBEDDING_PRESETS } from './rag/presets.ts';
 
 import { createSessionsRepo } from './memory/sessions.ts';
 
+import { resolvePlanByName, runOneShotCheck } from './monitor/one-shot.ts';
+import { defaultWatchesDir, loadPlansFromDir } from './monitor/plan-loader.ts';
+import { STOCK_PLANS } from './monitor/stock.ts';
+
 import { App } from './tui/App.tsx';
 import * as bootLoader from './tui/boot-loader-controller.ts';
 import {
@@ -200,7 +204,102 @@ async function pickPreviousSession(
   });
 }
 
+/**
+ * `piper check <plan-name> [environment]` — run every check in a plan once and exit.
+ *
+ * Exit codes:
+ *   0 — all checks passed
+ *   1 — at least one expectation-failed
+ *   2 — at least one check-error
+ *   3 — plan not found or invalid
+ */
+async function runCheckCommand(planName: string, environmentName: string | undefined): Promise<void> {
+  const logger = createLogger({ level: 'info' });
+
+  const ephemeral = process.env[ENV_VARS.EPHEMERAL] === '1';
+  const cfgResult = await readConfig().catch(() => null);
+  const dataDir = cfgResult?.config.dataDir;
+  const persistRoot =
+    dataDir !== undefined ? dataDir : `${process.env['HOME'] ?? '.'}/.piper/data`;
+  const pglitePath = `${persistRoot}/pglite`;
+  const db = await openDb(
+    ephemeral ? {} : { storage: { kind: 'file', path: pglitePath } },
+  );
+
+  const catalog = createCatalog();
+  registerBuiltins(catalog);
+
+  const sessionId = `check-${crypto.randomUUID()}`;
+  await db.query(
+    `INSERT INTO sessions (id, config_snapshot_json) VALUES ($1, $2::jsonb)`,
+    [sessionId, JSON.stringify({ mode: 'one-shot-check', plan: planName })],
+  );
+
+  const executor = createExecutor({
+    db,
+    catalog,
+    // No registry — check mode doesn't need environment auto-registration.
+    // Checks that require an environment will fail with a gate error, which
+    // becomes exit code 2. This is correct: the user needs a registered env.
+    //
+    // Defense-in-depth: watch plans are validated read-tier-only, but if a
+    // mutation proposal ever reached this path, check mode rejects it
+    // unconditionally. This is intentional, not dead code.
+    onMutationProposal: async () => ({
+      kind: 'reject' as const,
+      reason: 'mutations are not permitted in one-shot check mode',
+    }),
+  });
+
+  const deps = {
+    catalog,
+    executor,
+    sessionId,
+    logger,
+    ...(environmentName !== undefined ? { environmentName } : {}),
+  };
+
+  const plan = await resolvePlanByName(planName, deps);
+  if (plan === null) {
+    // List known plans so the user can self-correct.
+    const stockNames = STOCK_PLANS.map((p) => p.name);
+    const { plans: userPlans } = await loadPlansFromDir(defaultWatchesDir(), catalog);
+    const userNames = userPlans.map((e) => e.plan.name);
+    const allNames = [...stockNames, ...userNames];
+
+    process.stderr.write(
+      `piper: plan "${planName}" not found${environmentName === undefined ? ' (stock plans require an environment argument)' : ''}.\n`,
+    );
+    if (allNames.length > 0) {
+      process.stderr.write(`Available plans: ${allNames.join(', ')}\n`);
+    } else {
+      process.stderr.write(
+        `No user plans found. Stock plans: ${stockNames.join(', ')}\n` +
+        `Usage: piper check <plan-name> <environment>\n`,
+      );
+    }
+    await closeDb(db);
+    process.exit(3);
+  }
+
+  const exitCode = await runOneShotCheck(plan, deps);
+  await closeDb(db);
+  process.exit(exitCode);
+}
+
 async function main(): Promise<void> {
+  // `piper check <plan> [env]` — one-shot mode, no TUI, no wizard.
+  const args = process.argv.slice(2);
+  if (args[0] === 'check') {
+    const planName = args[1];
+    if (planName === undefined || planName === '') {
+      process.stderr.write('Usage: piper check <plan-name> [environment]\n');
+      process.exit(3);
+    }
+    await runCheckCommand(planName, args[2]);
+    return;
+  }
+
   await maybeRunWizard();
 
   const { config: cfg, preEnvironments, warnings: configWarnings } = await readConfig();
@@ -495,6 +594,9 @@ async function main(): Promise<void> {
       }}
       {...(cfg.apiKey === undefined ? {} : { openrouterApiKey: cfg.apiKey })}
       {...(resumedTitle === null ? {} : { initialTitle: resumedTitle })}
+      {...(preEnvironments !== null && preEnvironments.watchWebhooks.length > 0
+        ? { watchWebhookUrls: preEnvironments.watchWebhooks.map((w) => w.url) }
+        : {})}
     />,
   );
 
@@ -575,14 +677,28 @@ async function buildEmbeddingClient(
       return await createWasmEmbeddingClient({
         ...(creds?.embeddingModel === undefined ? {} : { modelId: creds.embeddingModel }),
         ...(creds?.embeddingDimension === undefined ? {} : { dimension: creds.embeddingDimension }),
-        onProgress: (p) => {
-          // Route progress into the boot bubble. Downloads are the only step
-          // long enough to be worth surfacing per-file; once we hit `ready`
-          // the next bootLoader.update from main() will overwrite this.
-          if (p.status === 'downloading' && p.file !== undefined) {
-            bootLoader.update('Loading the embedder…', `downloading ${p.file}`);
-          }
-        },
+        onProgress: (() => {
+          // Route progress into the boot bubble with a per-file progress bar.
+          // transformers.js fires this on every received chunk — throttle Ink
+          // re-renders to integer-percent changes so the terminal isn't
+          // repainted at download speed.
+          let lastFile = '';
+          let lastPct = -1;
+          return (p: { status: string; file?: string; loaded?: number; total?: number }): void => {
+            if (p.status !== 'downloading' || p.file === undefined) return;
+            const pct =
+              p.loaded !== undefined && p.total !== undefined && p.total > 0
+                ? Math.floor((Math.min(p.loaded, p.total) / p.total) * 100)
+                : -1;
+            if (p.file === lastFile && pct === lastPct) return;
+            lastFile = p.file;
+            lastPct = pct;
+            bootLoader.update(
+              'Loading the embedder…',
+              bootLoader.formatDownloadProgress(p.file, p.loaded, p.total),
+            );
+          };
+        })(),
       });
     } catch {
       // Failure is non-fatal — caller falls back to no-RAG. Surfaced to the

@@ -153,6 +153,43 @@ describe('tui/commands — /env add', () => {
   });
 });
 
+describe('tui/commands — /watch', () => {
+  test('/watch with no args opens the picker', () => {
+    const r = parseSlashCommand('/watch');
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.command.kind === 'watch') {
+      expect(r.command.target).toBeUndefined();
+    } else {
+      throw new Error('expected a watch command');
+    }
+  });
+
+  test('/watch <single-token> targets a plan by name', () => {
+    const r = parseSlashCommand('/watch staging-health');
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.command.kind === 'watch') {
+      expect(r.command.target).toBe('staging-health');
+    } else {
+      throw new Error('expected a watch command');
+    }
+  });
+
+  test('/watch <multiple words> is a free-text compile request', () => {
+    const r = parseSlashCommand('/watch keep an eye on staging');
+    expect(r?.ok).toBe(true);
+    if (r?.ok && r.command.kind === 'watch') {
+      expect(r.command.target).toBe('keep an eye on staging');
+    } else {
+      throw new Error('expected a watch command');
+    }
+  });
+
+  test('/w is not a recognised alias (removed)', () => {
+    const r = parseSlashCommand('/w');
+    expect(r?.ok).toBe(false);
+  });
+});
+
 describe('tui/commands — unknown commands', () => {
   test('/unknown returns error', () => {
     const r = parseSlashCommand('/unknown');

@@ -1,3 +1,6 @@
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
 
@@ -8,6 +11,7 @@ import { archiveReport } from '../agent/report-archiver.ts';
 import { createAgentRunner, type AgentRunner } from '../agent/runner.ts';
 import { buildSessionReport } from '../agent/session-report.ts';
 import { generateSessionTitle } from '../agent/title.ts';
+import { trackedComplete } from '../agent/tracked-complete.ts';
 import {
   countMessagesTokens,
   formatTokenCount,
@@ -31,6 +35,26 @@ import type { SessionId } from '../memory/types.ts';
 import type { CostTracker } from '../models/cost.ts';
 import type { ModelClient, RemoteCredit } from '../models/types.ts';
 import type { EmbeddingClient } from '../rag/embedding-client.ts';
+import { createAnomalyPolicy, DEFAULT_POLICY_CONFIG } from '../monitor/anomaly-policy.ts';
+import { runCheck } from '../monitor/check-runner.ts';
+import { createWatchDiagnoser } from '../monitor/diagnose.ts';
+import {
+  compileWatchPlan,
+  type CompilerMessage,
+} from '../monitor/plan-compiler.ts';
+import {
+  defaultWatchesDir,
+  loadPlansFromDir,
+  parseWatchPlan,
+  serializeWatchPlan,
+  validateAgainstCatalog,
+} from '../monitor/plan-loader.ts';
+import { runWatch } from '../monitor/scheduler.ts';
+import { instantiateStockPlan, STOCK_PLANS } from '../monitor/stock.ts';
+import type { CheckOutcome, WatchEvent, WatchPlan } from '../monitor/types.ts';
+import { InvalidWatchPlanError } from '../monitor/types.ts';
+import { createWatchStore } from '../monitor/watch-store.ts';
+import { createNotifier } from '../notify/notifier.ts';
 
 import { AgentEventLine } from './AgentEventLine.tsx';
 import { AlienFace } from './AlienFace.tsx';
@@ -40,6 +64,7 @@ import { Help } from './Help.tsx';
 import { parseSlashCommand, slashCompletions, type SlashCommand } from './commands.ts';
 import { MemoryViewer } from './MemoryViewer.tsx';
 import { ModelPicker, type ModelSelection } from './ModelPicker.tsx';
+import { WatchPanel, type WatchAnomalyView } from './WatchPanel.tsx';
 import { MutationApprovalPanel } from './MutationApprovalPanel.tsx';
 import { Proposals } from './Proposals.tsx';
 import { Report } from './Report.tsx';
@@ -78,6 +103,8 @@ export interface AppDeps {
    * this callback so the prompt renders in the TUI.
    */
   readonly registerMutationApprover?: (cb: MutationApprovalCallback) => void;
+  /** Webhook URLs sourced from ~/.piper/credentials.json watch_webhooks. */
+  readonly watchWebhookUrls?: readonly string[];
 }
 
 interface PendingApproval {
@@ -92,6 +119,18 @@ interface PendingMutation {
 }
 
 type ExecutionMode = 'human' | 'yolo';
+
+const WATCH_HISTORY_CAP = 20;
+const WATCH_ANOMALIES_CAP = 50;
+
+interface WatchUiState {
+  readonly plan: WatchPlan;
+  readonly lastOutcomes: ReadonlyMap<string, CheckOutcome>;
+  readonly history: ReadonlyMap<string, readonly boolean[]>;
+  readonly anomalies: readonly WatchAnomalyView[];
+  readonly diagnoses: ReadonlyMap<string, string>;
+  readonly diagnosing: ReadonlySet<string>;
+}
 
 interface State {
   entries: ChatEntry[];
@@ -124,6 +163,8 @@ interface State {
   streamingActive: boolean;
   pendingApproval?: PendingApproval;
   pendingMutation?: PendingMutation;
+  /** Active watch run UI state. null = not watching. */
+  watch: WatchUiState | null;
 }
 
 type Action =
@@ -157,7 +198,10 @@ type Action =
   | { type: 'pending-approval'; approval: PendingApproval }
   | { type: 'clear-approval' }
   | { type: 'pending-mutation'; mutation: PendingMutation }
-  | { type: 'clear-mutation' };
+  | { type: 'clear-mutation' }
+  | { type: 'watch-start'; plan: WatchPlan }
+  | { type: 'watch-event'; event: WatchEvent }
+  | { type: 'watch-stop' };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -276,9 +320,66 @@ function reducer(state: State, action: Action): State {
       delete next.pendingMutation;
       return next;
     }
+    case 'watch-start':
+      return {
+        ...state,
+        watch: {
+          plan: action.plan,
+          lastOutcomes: new Map(),
+          history: new Map(),
+          anomalies: [],
+          diagnoses: new Map(),
+          diagnosing: new Set(),
+        },
+      };
+    case 'watch-event':
+      return state.watch === null
+        ? state
+        : { ...state, watch: foldWatchEvent(state.watch, action.event) };
+    case 'watch-stop':
+      return { ...state, watch: null };
     default:
       return state;
   }
+}
+
+/**
+ * Fold a single WatchEvent into the watch UI state. Pure: returns a new
+ * WatchUiState with the relevant map/array replaced. Keeps the reducer case
+ * mechanical and under the per-function line budget.
+ */
+function foldWatchEvent(watch: WatchUiState, event: WatchEvent): WatchUiState {
+  if (event.type === 'check-result') {
+    const { outcome } = event;
+    const lastOutcomes = new Map(watch.lastOutcomes).set(outcome.checkName, outcome);
+    const prior = watch.history.get(outcome.checkName) ?? [];
+    const next = [...prior, outcome.kind === 'pass'].slice(-WATCH_HISTORY_CAP);
+    const history = new Map(watch.history).set(outcome.checkName, next);
+    return { ...watch, lastOutcomes, history };
+  }
+  if (event.type === 'anomaly') {
+    const view: WatchAnomalyView = {
+      checkName: event.checkName,
+      consecutiveFailures: event.consecutiveFailures,
+      atMs: event.atMs,
+    };
+    return { ...watch, anomalies: [view, ...watch.anomalies].slice(0, WATCH_ANOMALIES_CAP) };
+  }
+  if (event.type === 'diagnosis-started') {
+    return { ...watch, diagnosing: new Set(watch.diagnosing).add(event.checkName) };
+  }
+  if (event.type === 'diagnosis-ready') {
+    const diagnoses = new Map(watch.diagnoses).set(event.checkName, event.reportMarkdown);
+    const diagnosing = new Set(watch.diagnosing);
+    diagnosing.delete(event.checkName);
+    return { ...watch, diagnoses, diagnosing };
+  }
+  if (event.type === 'diagnosis-skipped') {
+    const diagnosing = new Set(watch.diagnosing);
+    diagnosing.delete(event.checkName);
+    return { ...watch, diagnosing };
+  }
+  return watch;
 }
 
 let idCounter = 0;
@@ -308,6 +409,7 @@ const INITIAL_STATE: State = {
   streamingPartial: '',
   streamingLines: [],
   streamingActive: false,
+  watch: null,
 };
 
 export function App(deps: AppDeps): JSX.Element {
@@ -316,6 +418,7 @@ export function App(deps: AppDeps): JSX.Element {
   const [currentClient, setCurrentClient] = useState<ModelClient>(deps.client);
   const [currentSessionId, setCurrentSessionId] = useState<SessionId>(deps.sessionId);
   const runnerRef = useRef<AgentRunner | null>(null);
+  const watchAbortRef = useRef<AbortController | null>(null);
 
   const approveProposals = useCallback(
     (proposals: readonly ProposedStep[], iteration: number): Promise<ProposalDecision> => {
@@ -853,6 +956,185 @@ export function App(deps: AppDeps): JSX.Element {
     [currentSessionId, deps.chatHistory, appendError],
   );
 
+  const stopWatch = useCallback(() => {
+    watchAbortRef.current?.abort();
+    watchAbortRef.current = null;
+    dispatch({ type: 'watch-stop' });
+  }, []);
+
+  const startWatch = useCallback(
+    (plan: WatchPlan): void => {
+      const runner = runnerRef.current;
+      if (runner === null || deps.db === undefined) {
+        appendError('cannot start watch — runner or database not available');
+        return;
+      }
+      const abortController = new AbortController();
+      watchAbortRef.current = abortController;
+      dispatch({ type: 'watch-start', plan });
+      appendInfo(`watching "${plan.name}" on ${plan.environment} — press q or Esc to stop`);
+
+      const store = createWatchStore(deps.db);
+      const policy = createAnomalyPolicy(DEFAULT_POLICY_CONFIG, () => Date.now());
+      const notifier = createNotifier({
+        execDesktopNotification: async (title, message) => {
+          await deps.executor.exec('notify.desktop', { title, message }, { sessionId: currentSessionId });
+        },
+        webhookUrls: deps.watchWebhookUrls ?? [],
+      });
+      const diagnoser = createWatchDiagnoser({
+        runDiagnostic: (prompt) => runner.run({ userRequest: prompt, sessionId: currentSessionId }),
+        isAffordable: () => deps.costTracker.maxSessionCostUsd === null
+          || state.costUsd < deps.costTracker.maxSessionCostUsd,
+      });
+      const gen = runWatch(plan, {
+        runCheck: (check) =>
+          runCheck(check, {
+            executor: deps.executor,
+            catalog: deps.catalog,
+            sessionId: currentSessionId,
+            now: () => Date.now(),
+          }),
+        policy,
+        store,
+        sessionId: currentSessionId,
+        now: () => Date.now(),
+        sleep: abortableSleep,
+        signal: abortController.signal,
+        notify: async (_checkName, watchPlan, outcome) => {
+          await notifier.notifyAnomaly(watchPlan, outcome);
+        },
+        diagnose: diagnoser,
+      });
+
+      void (async () => {
+        try {
+          for await (const ev of gen) {
+            if (ev.type === 'anomaly') process.stdout.write('');
+            // Surface notifier failures in the chat feed before folding into
+            // the reducer — the WatchUiState has no field for them and the
+            // user needs to know their notification channel is broken.
+            if (ev.type === 'notify-failed') {
+              appendError(`notifier (${ev.channel}): ${ev.message}`);
+              continue;
+            }
+            dispatch({ type: 'watch-event', event: ev });
+          }
+        } catch (err) {
+          appendError(`watch loop crashed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          if (watchAbortRef.current === abortController) watchAbortRef.current = null;
+          dispatch({ type: 'watch-stop' });
+        }
+      })();
+    },
+    [deps.db, deps.executor, deps.catalog, deps.costTracker, currentSessionId, state.costUsd, appendInfo, appendError],
+  );
+
+  const startStockPlan = useCallback(
+    async (stockText: string, planName: string): Promise<void> => {
+      const envs = await deps.registry.list();
+      if (envs.length === 0) {
+        appendError('no environments registered. /env add <name> <user@host[:port]> first.');
+        return;
+      }
+      if (envs.length > 1) {
+        appendInfo(`"${planName}" needs an environment. Registered: ${envs.map((e) => e.name).join(', ')}`);
+        appendInfo(`Re-run as: /watch ${planName} <env-name>  — or run /watch <env-name>-${planName}`);
+        return;
+      }
+      const env = envs[0]!;
+      try {
+        const plan = parseWatchPlan(instantiateStockPlan(stockText, env.name), 'stock');
+        validateAgainstCatalog(plan, deps.catalog);
+        startWatch(plan);
+      } catch (err) {
+        const msg = err instanceof InvalidWatchPlanError || err instanceof Error ? err.message : String(err);
+        appendError(`could not start ${planName}: ${msg}`);
+      }
+    },
+    [deps.registry, deps.catalog, startWatch, appendInfo, appendError],
+  );
+
+  const compileFromText = useCallback(
+    async (request: string): Promise<void> => {
+      const envs = await deps.registry.list();
+      if (envs.length === 0) {
+        appendError('no environments registered — cannot compile a watch plan.');
+        return;
+      }
+      appendInfo('compiling a watch plan from your request…');
+      dispatch({ type: 'set-busy', busy: true });
+      try {
+        const result = await compileWatchPlan(request, {
+          catalog: deps.catalog,
+          environmentNames: envs.map((e) => e.name),
+          complete: (messages) => completeForCompiler(messages, currentClient, currentSessionId, deps.costTracker, dispatch),
+        });
+        if (result.kind === 'error') {
+          appendError(`compile failed: ${result.message}`);
+          return;
+        }
+        const dir = defaultWatchesDir();
+        await mkdir(dir, { recursive: true });
+        const path = join(dir, `${result.plan.name}.md`);
+        await Bun.write(path, serializeWatchPlan(result.plan));
+        appendInfo(`compiled "${result.plan.name}" (${result.plan.checks.length} checks) → saved to ${path}`);
+        for (const c of result.plan.checks) {
+          appendInfo(`  ${c.name}: ${c.action} expect ${c.expect.kind}`);
+        }
+        appendInfo(`Start it with /watch ${result.plan.name}`);
+      } catch (err) {
+        appendError(`compile error: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        dispatch({ type: 'set-busy', busy: false });
+      }
+    },
+    [deps.registry, deps.catalog, deps.costTracker, currentClient, currentSessionId, appendInfo, appendError],
+  );
+
+  const handleWatchCommand = useCallback(
+    async (target: string | undefined): Promise<void> => {
+      const userPlans = await loadPlansFromDir(defaultWatchesDir(), deps.catalog);
+      for (const f of userPlans.failures) {
+        appendError(`skipped plan ${f.path}: ${f.message}`);
+      }
+
+      // No target → list stock + user plans.
+      if (target === undefined) {
+        appendInfo('stock plans:');
+        for (const sp of STOCK_PLANS) appendInfo(`  ${sp.name}`);
+        if (userPlans.plans.length > 0) {
+          appendInfo('your plans:');
+          for (const p of userPlans.plans) appendInfo(`  ${p.plan.name} — ${p.plan.description}`);
+        }
+        appendInfo('Use /watch <name> to start, or /watch <description> to compile a new plan.');
+        return;
+      }
+
+      const stock = STOCK_PLANS.find((sp) => sp.name === target);
+      const userMatch = userPlans.plans.find((p) => p.plan.name === target);
+
+      if (stock !== undefined) {
+        await startStockPlan(stock.text, target);
+        return;
+      }
+      if (userMatch !== undefined) {
+        startWatch(userMatch.plan);
+        return;
+      }
+
+      // A single token that names no plan, or multi-word text → compile.
+      const looksLikePlanName = /^[a-z][a-z0-9-]*$/.test(target);
+      if (looksLikePlanName && !target.includes(' ')) {
+        appendError(`no plan named "${target}". /watch lists available plans.`);
+        return;
+      }
+      await compileFromText(target);
+    },
+    [deps.catalog, startWatch, startStockPlan, compileFromText, appendInfo, appendError],
+  );
+
   const submit = useCallback(async (override?: string) => {
     const text = (override ?? state.input).trim();
     if (text === '') return;
@@ -860,12 +1142,17 @@ export function App(deps: AppDeps): JSX.Element {
     dispatch({ type: 'append-entry', entry: { kind: 'user', id: nextId(), text } });
     const parsed = parseSlashCommand(text);
     if (parsed !== null) {
-      if (parsed.ok) await handleSlashCommand(parsed.command);
-      else appendError(parsed.message);
+      if (parsed.ok && parsed.command.kind === 'watch') {
+        await handleWatchCommand(parsed.command.target);
+      } else if (parsed.ok) {
+        await handleSlashCommand(parsed.command);
+      } else {
+        appendError(parsed.message);
+      }
       return;
     }
     await runAgent(text);
-  }, [state.input, handleSlashCommand, runAgent, appendError]);
+  }, [state.input, handleSlashCommand, handleWatchCommand, runAgent, appendError]);
 
   const resolveApproval = useCallback(
     (decision: ProposalDecision) => {
@@ -888,6 +1175,14 @@ export function App(deps: AppDeps): JSX.Element {
   useInput((input, key) => {
     if (state.showHelp) {
       dispatch({ type: 'set-help', show: false });
+      return;
+    }
+    // While a watch is active the WatchPanel owns the keyboard (↑↓/⏎/d/q/Esc).
+    // Opt the main App out entirely — Ink delivers each key to every active
+    // useInput subscriber, so without this the panel's keys would also leak
+    // into the prompt buffer. Stopping the watch is handled by the panel's
+    // own onStop → stopWatch.
+    if (state.watch !== null) {
       return;
     }
     // Mode toggle: Shift+Tab — always available
@@ -1195,6 +1490,27 @@ export function App(deps: AppDeps): JSX.Element {
         />
       )}
 
+      {state.watch !== null && (
+        <WatchPanel
+          plan={state.watch.plan}
+          lastOutcomes={state.watch.lastOutcomes}
+          history={state.watch.history}
+          anomalies={state.watch.anomalies}
+          diagnoses={state.watch.diagnoses}
+          diagnosing={state.watch.diagnosing}
+          onStop={stopWatch}
+          onViewDiagnosis={(checkName) => {
+            const md = state.watch?.diagnoses.get(checkName);
+            if (md !== undefined && md !== '') {
+              dispatch({
+                type: 'append-entry',
+                entry: { kind: 'report', id: nextId(), markdown: md, verified: true },
+              });
+            }
+          }}
+        />
+      )}
+
       {state.pendingApproval !== undefined && (
         <Proposals
           proposals={state.pendingApproval.proposals}
@@ -1215,6 +1531,7 @@ export function App(deps: AppDeps): JSX.Element {
 
       {state.pendingApproval === undefined &&
         state.pendingMutation === undefined &&
+        state.watch === null &&
         !state.showModelPicker &&
         !state.showSessionPicker &&
         !state.showMemoryViewer && (
@@ -1298,6 +1615,44 @@ export function App(deps: AppDeps): JSX.Element {
       )}
     </Box>
   );
+}
+
+/** A sleep that resolves early when the AbortSignal fires (clean watch shutdown). */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+/**
+ * The compiler's `complete` hook: one LLM round-trip through the cost-tracked
+ * path (budget guard + record), returning assistant text. Mirrors how the agent
+ * runner issues LLM calls — never a raw fetch.
+ */
+async function completeForCompiler(
+  messages: readonly CompilerMessage[],
+  client: ModelClient,
+  sessionId: SessionId,
+  costTracker: CostTracker,
+  dispatch: React.Dispatch<Action>,
+): Promise<string> {
+  const { completion, costUsd } = await trackedComplete({
+    client,
+    costTracker,
+    sessionId,
+    role: 'planner',
+    req: { messages: messages.map((m) => ({ role: m.role, content: m.content })) },
+  });
+  if (costUsd > 0) dispatch({ type: 'inc-cost', usd: costUsd });
+  return completion.content;
 }
 
 async function recountTokens(

@@ -14,6 +14,12 @@ export function Help(): JSX.Element {
         <Text>  /env remove &lt;name&gt;</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
+        <Text bold>Watch (continuous monitoring)</Text>
+        <Text>  /watch                  list stock + your watch plans</Text>
+        <Text>  /watch &lt;plan&gt;           start a known plan (q or Esc stops it)</Text>
+        <Text>  /watch &lt;description&gt;    compile a new plan from plain English, then save it</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
         <Text bold>Session</Text>
         <Text>  /help    show this screen (press any key to return)</Text>
         <Text>  /save [file.md]  export the last report

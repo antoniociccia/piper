@@ -27,7 +27,13 @@ interface RawCredentials {
   readonly compaction_keep_recent?: unknown;
   readonly compaction_trigger_pct?: unknown;
   readonly max_followup_iterations?: unknown;
+  readonly watch_webhooks?: unknown;
   readonly environments?: Record<string, RawEnvironment>;
+}
+
+export interface WatchWebhook {
+  readonly name: string;
+  readonly url: string;
 }
 
 export interface PiperCredentials {
@@ -45,6 +51,7 @@ export interface PiperCredentials {
   readonly compactionKeepRecent?: number;
   readonly compactionTriggerPct?: number;
   readonly maxFollowupIterations?: number;
+  readonly watchWebhooks: readonly WatchWebhook[];
   readonly environments: readonly EnvironmentInput[];
 }
 
@@ -146,7 +153,22 @@ export async function readPiperCredentials(
     ...(asNumber(raw.max_followup_iterations) === undefined
       ? {}
       : { maxFollowupIterations: Math.max(0, Math.floor(raw.max_followup_iterations as number)) }),
+    watchWebhooks: parseWatchWebhooks(raw.watch_webhooks),
     environments,
   };
   return out;
+}
+
+function parseWatchWebhooks(raw: unknown): readonly WatchWebhook[] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const result: WatchWebhook[] = [];
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && value !== '') {
+      // Any non-empty string is accepted here on purpose: https enforcement
+      // happens at send time (postWebhook in src/notify/webhook.ts refuses any
+      // non-https scheme), so the config layer does not need to re-validate it.
+      result.push({ name, url: value });
+    }
+  }
+  return result;
 }

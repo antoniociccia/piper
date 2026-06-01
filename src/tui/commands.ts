@@ -9,6 +9,7 @@ export type SlashCommand =
   | { readonly kind: 'model'; readonly target?: string }
   | { readonly kind: 'resume' }
   | { readonly kind: 'memory' }
+  | { readonly kind: 'watch'; readonly target?: string }
   | { readonly kind: 'debug' };
 
 export type ParseResult =
@@ -99,6 +100,17 @@ export function parseSlashCommand(line: string): ParseResult | null {
 
   if (head === 'memory' || head === 'mem' || head === 'rag') {
     return { ok: true, command: { kind: 'memory' } };
+  }
+
+  if (head === 'watch') {
+    // Everything after the verb is the target: a single token names a plan,
+    // multiple words are a free-text compile request. Either way it rides as
+    // one opaque string and the App decides how to interpret it.
+    const rest = trimmed.slice(1 + head.length).trim();
+    return {
+      ok: true,
+      command: { kind: 'watch', ...(rest === '' ? {} : { target: rest }) },
+    };
   }
 
   if (head === 'debug' || head === 'verbose') {
@@ -194,6 +206,7 @@ const SLASH_COMMANDS: readonly SlashCompletion[] = [
   { command: '/annex ', hint: '[title] — annex this session as solved-case' },
   { command: '/model', hint: 'switch active model (local or OpenRouter)' },
   { command: '/memory', hint: 'inspect / manage the knowledge base (runbooks, ADRs, annex)' },
+  { command: '/watch', hint: '[plan|description] — start a continuous monitoring loop' },
   { command: '/debug', hint: 'toggle verbose agent events (costs, synth status, verify result)' },
   { command: '/resume', hint: 'resume a previous session' },
   { command: '/compact', hint: 'force history compaction now' },

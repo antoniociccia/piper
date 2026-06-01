@@ -117,6 +117,43 @@ describe('config/credentials — environments', () => {
   });
 });
 
+describe('config/credentials — watch_webhooks', () => {
+  test('parses watch_webhooks map into watchWebhooks array, skipping non-string values', async () => {
+    writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        watch_webhooks: {
+          team: 'https://hooks.example.com/x',
+          bad: 123,
+        },
+      }),
+    );
+    const result = await readPiperCredentials(credentialsPath);
+    expect(result?.watchWebhooks).toEqual([{ name: 'team', url: 'https://hooks.example.com/x' }]);
+  });
+
+  test('watchWebhooks defaults to empty array when watch_webhooks is absent', async () => {
+    writeFileSync(credentialsPath, JSON.stringify({}));
+    const result = await readPiperCredentials(credentialsPath);
+    expect(result?.watchWebhooks).toEqual([]);
+  });
+
+  test('watchWebhooks defaults to empty array when watch_webhooks is not an object', async () => {
+    writeFileSync(credentialsPath, JSON.stringify({ watch_webhooks: 'not-an-object' }));
+    const result = await readPiperCredentials(credentialsPath);
+    expect(result?.watchWebhooks).toEqual([]);
+  });
+
+  test('skips empty-string URL entries', async () => {
+    writeFileSync(
+      credentialsPath,
+      JSON.stringify({ watch_webhooks: { empty: '', valid: 'https://hooks.example.com/y' } }),
+    );
+    const result = await readPiperCredentials(credentialsPath);
+    expect(result?.watchWebhooks).toEqual([{ name: 'valid', url: 'https://hooks.example.com/y' }]);
+  });
+});
+
 describe('config/credentials — path resolution', () => {
   test('PIPER_CREDENTIALS_FILE env var overrides the default path', async () => {
     writeFileSync(credentialsPath, JSON.stringify({ openrouter_api_key: 'sk-or-x' }));
