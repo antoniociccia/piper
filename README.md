@@ -165,6 +165,8 @@ Bun, no `node_modules`, single ~76 MB file.
 ```bash
 # macOS (Apple Silicon)
 curl -fsSLO https://github.com/antoniociccia/piper/releases/latest/download/piper-darwin-arm64
+# Strip Gatekeeper's quarantine xattr (the binary isn't notarised yet).
+xattr -d com.apple.quarantine piper-darwin-arm64 2>/dev/null || true
 chmod +x piper-darwin-arm64 && mv piper-darwin-arm64 /usr/local/bin/piper
 piper
 
@@ -176,6 +178,13 @@ piper
 
 A `.sha256` is published alongside each binary — verify the download before
 running.
+
+> [!NOTE]
+> **macOS — PIPER is a terminal CLI, not a Mac app.** Run `piper` from a
+> shell; do **not** double-click the downloaded binary in Finder. The binary
+> isn't notarised by Apple yet, so double-clicking shows "is damaged and
+> can't be opened". From the terminal it runs normally. Notarisation is
+> tracked on the roadmap.
 
 ### Option B — from source
 
