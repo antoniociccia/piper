@@ -10,6 +10,7 @@ import onnxRuntimeWasmPath from '../../node_modules/onnxruntime-web/dist/ort-was
 import onnxRuntimeMjsPath from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs' with { type: 'file' };
 
 import type { EmbeddingClient } from './embedding-client.ts';
+import { createModelFileCache } from './wasm-model-cache.ts';
 
 /**
  * Default Hugging Face model for WASM-mode embeddings. multilingual-e5-small
@@ -59,6 +60,8 @@ interface HFEnv {
   cacheDir: string;
   allowRemoteModels: boolean;
   allowLocalModels: boolean;
+  useCustomCache: boolean;
+  customCache: unknown;
   backends?: HFBackends;
 }
 
@@ -91,15 +94,38 @@ export async function createWasmEmbeddingClient(
   // that requires `onnxruntime-node` — a native binding that cannot be
   // embedded in a `bun build --compile` artifact. The web build uses
   // `onnxruntime-web` (WASM), which we ship as bundled assets below.
-  const mod = (await import(
-    '../../node_modules/@huggingface/transformers/dist/transformers.web.js'
-  )) as unknown as HFModule;
+  //
+  // CRITICAL — mask the Node identity during the import. Bun reports
+  // `process.release.name === 'node'`, which makes the WEB build take its
+  // Node code path: "return a file path from the filesystem cache". But the
+  // web build ships with node:fs shimmed out, so that path always fails with
+  // "Unable to get model file path or buffer". Masking the release name while
+  // the module's top-level environment detection runs makes it treat Bun as a
+  // browser-like runtime: models are downloaded into memory buffers, which
+  // works everywhere (dev mode and compiled binary).
+  const realRelease = process.release;
+  Object.defineProperty(process, 'release', {
+    value: { ...realRelease, name: 'bun' },
+    configurable: true,
+  });
+  let mod: HFModule;
+  try {
+    mod = (await import(
+      '../../node_modules/@huggingface/transformers/dist/transformers.web.js'
+    )) as unknown as HFModule;
+  } finally {
+    Object.defineProperty(process, 'release', { value: realRelease, configurable: true });
+  }
   mod.env.cacheDir = cacheDir;
   mod.env.allowRemoteModels = true;
   // Keep transformers.js from probing its default `localModelPath` (`/models/`)
   // — in the compiled binary that path doesn't exist and the fetch fails with
   // "URL is invalid" before we ever get to the remote fetch.
   mod.env.allowLocalModels = false;
+  // The web build has no working cache in Bun (no browser Cache API, no fs).
+  // Plug in our filesystem cache so model assets download once, not per boot.
+  mod.env.useCustomCache = true;
+  mod.env.customCache = createModelFileCache(cacheDir);
 
   // Point the ONNX WASM runtime at the assets we embedded. Without this the
   // compiled binary would try to fetch them from a CDN at runtime, defeating
