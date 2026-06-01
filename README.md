@@ -11,7 +11,7 @@ the LLM proposes, deterministic code validates, the human approves anything that
 
 [![CI](https://github.com/antoniociccia/piper/actions/workflows/ci.yml/badge.svg)](https://github.com/antoniociccia/piper/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.2-black?logo=bun)](https://bun.sh)
+[![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3-black?logo=bun)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
 [![Tests](https://img.shields.io/badge/tests-386%20passing-brightgreen)](#tests)
 [![Status](https://img.shields.io/badge/status-M1.5%20%E2%80%94%20diagnostics%20%2B%20RAG-success)]()
@@ -145,12 +145,13 @@ can always see exactly what it is about to do.**
 | **M0** | Spike — Bun `--compile` + Ink + PGlite WASM | ✅ shipped |
 | **M1** | Read-only diagnostics: SSH, logs, health, container/pod status, **deterministic gate** | ✅ shipped |
 | **M1.5** | RAG/memory layer, 3 embedding backends, sessions + resume, auto-compaction, interactive `/model` & `/memory`, HUMAN/YOLO modes, 40+ read actions | ✅ shipped |
-| **M2** | Mutations behind HITL — docker deploy, env updates, migrations, rollback | ⏳ next |
-| **M3** | Scale — Kubernetes deploys, continuous monitor loop, repo suggestions | ⏳ |
+| **M2** | Mutations behind HITL — docker deploy gated by snapshot → dry-run → approve → verify → rollback | ✅ shipped |
+| **M3a** | **Watch mode** — `/watch` compiles plain-English requests into deterministic, read-only checks; anomalies trigger automatic grounded diagnosis and (gated) remediation proposals | ✅ shipped |
+| **M3b/c** | Kubernetes gated deploy, repo suggestions | ⏳ |
 | **M4** | On-prem / regulated — local-model-only path, encrypted audit, runbook ingestion at install | ⏳ |
 
-No `mutate` or `destructive` tier actions exist in the catalog yet, and the
-runner explicitly refuses them. **M1.5 is fully diagnostic by design.**
+Mutations land in M2 behind the full approval gate; the read-only diagnostic
+flow and the new **watch loop** are diagnostic by construction.
 
 ---
 
@@ -188,7 +189,7 @@ running.
 
 ### Option B — from source
 
-Need [Bun](https://bun.sh) ≥ 1.2 (one-line install: `curl -fsSL https://bun.sh/install | bash`).
+Need [Bun](https://bun.sh) ≥ 1.3 (one-line install: `curl -fsSL https://bun.sh/install | bash`).
 
 ```bash
 git clone https://github.com/antoniociccia/piper
@@ -393,6 +394,43 @@ source. Zero manual migration.
 
 ---
 
+## Watch mode
+
+`/watch` compiles a plain-English request into **deterministic, read-only
+checks**, runs them on a cadence with **zero LLM cost per tick**, and — only
+when a check actually fails — fires an **automatic grounded diagnosis** and a
+**gated remediation proposal**. The LLM is never in the monitoring hot loop.
+
+```
+/watch docker-basics                  # start a bundled stock plan
+/watch keep an eye on staging         # compile a custom plan from plain English
+piper check docker-basics staging     # one-shot mode for cron/CI (exit 0/1/2/3)
+```
+
+A watch plan is a skill-like markdown file (`~/.piper/watches/*.md`): YAML
+frontmatter listing the checks plus a prose runbook the LLM reads only on
+anomaly. Each check pairs a **read-tier catalog action** with an expectation
+from a **closed DSL** of seven kinds (`exit_zero`, `all_running`,
+`max_percent`, `min_count`, `regex_match`, `regex_absent`, `json_path_eq`),
+evaluated in-process. Plans that name a `mutate`/`destructive` action, or whose
+args don't satisfy the action's schema, are rejected at load.
+
+When a check fails twice in a row (debounce), PIPER fires once and stays quiet
+for 15 minutes (cooldown). On fire it notifies you (TUI bell, desktop
+notification via the audited `notify.desktop` action, and an optional
+`https`-only webhook with a **metadata-only, scrubbed** payload), then runs a
+budget-guarded diagnosis through the normal agent runner. Any fix it proposes
+goes through the **M2 approval gate** — the watch loop never mutates anything on
+its own.
+
+Three stock plans ship in source: **`docker-basics`**, **`k8s-basics`**,
+**`disk-and-memory`**. `piper check <plan> [env]` runs every check once and
+exits with a meaningful code (0 all-passed, 1 expectation failed, 2 check error,
+3 plan not found) — drop it into cron or CI. Full design rationale in
+[`docs/decisions/ADR-003-watch-mode.md`](docs/decisions/ADR-003-watch-mode.md).
+
+---
+
 ## TUI modes & commands
 
 Toggle modes with **Shift+Tab**:
@@ -407,6 +445,7 @@ Toggle modes with **Shift+Tab**:
 
 ```
 /model               interactive model picker (Local / OpenRouter tabs, paging, filter)
+/watch [plan|text]   list watch plans, start one, or compile a new plan from plain English
 /memory              knowledge-base viewer (Overview + Sources, delete with d)
 /mem, /rag           aliases for /memory
 /resume              pick a recent session and reload its history into scrollback
@@ -480,7 +519,7 @@ Y(◉ ◉)Y  diagnosing staging      $0.0123 | google/gemini-pro-1.5 | OR $4.32 
 
 | Concern              | Choice                                                                  |
 |----------------------|-------------------------------------------------------------------------|
-| Runtime              | **Bun** ≥ 1.2 (single-binary via `bun build --compile`)                |
+| Runtime              | **Bun** ≥ 1.3 (single-binary via `bun build --compile`; `Bun.YAML` for watch plans) |
 | Language             | **TypeScript** strict (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, no `any`) |
 | Terminal UI          | **Ink** (React for the terminal)                                        |
 | Persistence          | **PGlite** (PostgreSQL in WASM — single embedded DB)                   |

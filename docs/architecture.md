@@ -202,6 +202,92 @@ gate today. M2 introduces the approval flow.
 
 ---
 
+## Watch mode (M3a)
+
+Watch mode adds continuous, unattended monitoring without putting the LLM in
+the hot loop. The Prime Directive extends to the case where nobody is looking:
+checks are deterministic, the model is invoked only on a confirmed anomaly, and
+any remediation it proposes still goes through the M2 approval gate. See
+[ADR-003](decisions/ADR-003-watch-mode.md) for the full rationale.
+
+```
+   ~/.piper/watches/*.md   (or a bundled stock plan, or NL → compiled plan)
+            │
+            ▼
+   ┌──────────────────┐   gate validation: every check's action must be
+   │  plan loader      │   read-tier and in the catalog; args must satisfy
+   │ (Bun.YAML + Zod)  │   the action's argsSchema. Reject on mutate/
+   └────────┬─────────┘   destructive/unknown action or bad args.
+            │ WatchPlan (deep-frozen checks)
+            ▼
+   ┌──────────────────┐   tick loop: for each due check, sleep until the
+   │   scheduler       │   earliest next-due time. TUI-agnostic, daemon-ready,
+   │  (runWatch gen)   │   AbortSignal-stoppable, persists before it yields.
+   └────────┬─────────┘
+            │ WatchCheck
+            ▼
+   ┌──────────────────┐   one check = one read action through the SAME
+   │  check runner     │   Executor (catalog, scrub, audit — all unchanged).
+   │ (via Executor)    │
+   └────────┬─────────┘
+            │ command output
+            ▼
+   ┌──────────────────┐   closed DSL, 7 kinds (exit_zero, all_running,
+   │ expectation eval  │   max_percent, min_count, regex_match, regex_absent,
+   │ (in-process, no   │   json_path_eq). Zero LLM calls per tick.
+   │  LLM)             │
+   └────────┬─────────┘
+            │ pass / expectation-failed / check-error
+            ▼
+   ┌──────────────────┐   debounce (2 consecutive failures) + cooldown
+   │  anomaly policy   │   (15 min per check). Fires only on a confirmed,
+   └────────┬─────────┘   non-flapping anomaly.
+            │ fire
+            ├───────────────► notify  (TUI bell • notify.desktop action •
+            │                          scrubbed metadata-only https webhook)
+            ▼
+   ┌──────────────────┐   budget-guarded. Runs the normal agent runner over
+   │  diagnoser        │   the failing check + the plan's runbook body.
+   └────────┬─────────┘
+            │ grounded diagnosis (+ optional remediation proposal)
+            ▼
+   ┌──────────────────┐   any proposed mutation flows through the existing
+   │  M2 approval gate │   M2 flow — propose → dry-run → approve → verify →
+   └──────────────────┘   rollback. The watch loop never mutates on its own.
+```
+
+`piper check <plan> [env]` is a one-shot CLI mode (no TUI): it runs every check
+in a plan once and exits with a meaningful code (0 all-passed, 1 expectation
+failed, 2 check error, 3 plan not found). Intended for cron/CI — but it runs the
+same gated, catalog-bound checks; it is not an escape hatch.
+
+### Security invariants
+
+Watch mode adds no new exec surface and no new way for the LLM to reach
+infrastructure. The invariants:
+
+- **Read-tier only.** Every check's action is validated against the catalog at
+  plan-load time and must be `read`-tier. A plan naming a `mutate` or
+  `destructive` action is rejected.
+- **Args schema validation.** Each check's `args` must satisfy the referenced
+  action's `argsSchema`. Bad args are rejected at load, not at run time.
+- **Scrubbed persistence.** Check results, anomalies, and diagnoses are scrubbed
+  before they are written to PGlite, exactly like evidence and the audit log.
+- **Metadata-only webhooks.** Webhook payloads carry plan / check / expectation-
+  kind / timestamp only — never raw command output. Endpoints must be `https`;
+  non-https is refused at send time.
+- **Spawn only via the Executor.** Desktop notifications are the `notify.desktop`
+  catalog action, not an inline `spawn`. All process spawning still funnels
+  through the one Executor.
+- **LLM bounded by catalog + approval.** The diagnoser runs the normal agent
+  runner, so it can only call catalog actions, and any mutation it proposes goes
+  through the M2 approval gate. The deterministic gate is unchanged.
+
+See [ADR-003](decisions/ADR-003-watch-mode.md) for the design rationale and the
+alternatives rejected (LLM-per-tick, external cron, Turing-complete checks).
+
+---
+
 ## Memory model
 
 PIPER's persistent state lives in a single embedded Postgres (PGlite). The
@@ -214,6 +300,9 @@ tables:
 | `chat_messages`   | Multi-turn conversation history (prompts + reports), per session |
 | `sessions`        | Session metadata (id, title, `last_active_at`)                  |
 | `rag_documents`   | Stable knowledge (runbooks, ADRs, solved cases), pgvector HNSW  |
+| `watch_runs`         | One row per watch run (plan, environment, start/stop, reason)     |
+| `watch_check_results`| Per-tick check outcomes (scrubbed detail), forensic              |
+| `watch_anomalies`    | Fired anomalies + their diagnosis status / report (M3a)          |
 
 Two cross-cutting mechanisms operate on top:
 
@@ -371,6 +460,7 @@ machine" risk is structurally absent.
 
 - [ADR-001: The deterministic gate is the product](decisions/ADR-001-deterministic-gate.md)
 - [ADR-002: Plain async-generator runner, not LangGraph (yet)](decisions/ADR-002-no-langgraph-yet.md)
+- [ADR-003: Watch mode — deterministic loop, LLM only on anomaly](decisions/ADR-003-watch-mode.md)
 - [runbooks/](runbooks/) — operational guides ingested into RAG at boot
 - [README.md](../README.md) — what PIPER does for the user
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — how to contribute

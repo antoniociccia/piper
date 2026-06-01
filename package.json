@@ -1,6 +1,6 @@
 {
   "name": "piper",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Pipeline Intelligence, Provisioning, Error-handling & Releases — terminal-first LLM-driven DevOps copilot",
   "license": "Apache-2.0",
   "author": "Antonio Ciccia + The Piper Contributors",
@@ -54,6 +54,6 @@
     "typescript": "^5.6.3"
   },
   "engines": {
-    "bun": ">=1.2.0"
+    "bun": ">=1.3.0"
   }
 }

@@ -6,7 +6,56 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
-## [Unreleased]
+## [0.3.0] — 2026-06-01
+
+### Added — Watch mode (M3a)
+
+- `/watch` TUI command: list, start, and compile watch plans.
+- Watch plans as skill-like markdown files (`~/.piper/watches/*.md`): YAML
+  frontmatter checks + prose runbook fed to the LLM only on anomaly.
+- Closed expectation DSL (7 kinds: `exit_zero`, `all_running`, `max_percent`,
+  `min_count`, `regex_match`, `regex_absent`, `json_path_eq`), evaluated
+  in-process — **zero LLM cost per tick**.
+- Read-tier-only gate validation for watch plans: a plan naming a `mutate` or
+  `destructive` action, an unknown action, or args that fail the action's
+  `argsSchema` is rejected at load.
+- Bundled stock plans: `docker-basics`, `k8s-basics`, `disk-and-memory`.
+- NL → plan compiler with validation retry (cost-tracked).
+- Anomaly policy: per-check debounce (2 consecutive failures) and cooldown
+  (15 min).
+- Automatic anomaly diagnosis through the agent runner (budget-guarded);
+  remediation proposals go through the M2 approval flow. The watch loop never
+  mutates on its own.
+- `notify.desktop` catalog action (macOS / Linux desktop notifications via the
+  audited Executor).
+- Webhook notifications with metadata-only, scrubbed payloads (`https`-only,
+  enforced at send time).
+- `piper check <plan> [env]` one-shot CLI mode with meaningful exit codes
+  (0 all-passed, 1 expectation failed, 2 check error, 3 plan not found) — for
+  cron / CI.
+- PGlite migration v3: `watch_runs`, `watch_check_results`, `watch_anomalies`
+  tables.
+
+### Changed — Watch mode (M3a)
+
+- Bun engine requirement raised to `>= 1.3.0` (uses `Bun.YAML` to parse plan
+  frontmatter).
+
+### Security — Watch mode (M3a)
+
+- AppleScript injection prevention in desktop notifications (layered
+  sanitisation of plan/check names).
+- Watch-plan prototype-pollution gate tests; check args are deep-frozen.
+- All user-influenced text columns in the watch store are scrubbed before
+  persistence.
+
+### Fixed
+
+- WASM embedder: model assets are cached on disk (`~/.piper/cache/models`)
+  and download **once**, not on every boot. First-boot downloads now show a
+  per-file progress bar (percentage + MB) instead of a frozen filename.
+
+## [0.2.0] — 2026-05-29
 
 ### Added — TUI / UX
 
