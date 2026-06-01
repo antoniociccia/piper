@@ -40,6 +40,8 @@ import { networkConnections } from './network-connections.ts';
 import { networkDnsLookup } from './network-dns-lookup.ts';
 import { networkPing } from './network-ping.ts';
 import { networkPortCheck } from './network-port-check.ts';
+// Notifications (local machine)
+import { notifyDesktop } from './notify-desktop.ts';
 // Database
 import { postgresIsready } from './postgres-isready.ts';
 // systemd services
@@ -120,6 +122,8 @@ export const BUILTIN_ACTIONS = [
   gcloudComputeList,
   gcloudLoggingTail,
   azVmList,
+  // Notifications (local machine)
+  notifyDesktop,
   // Database
   postgresIsready,
   // Project memory (RAG over runbooks / ADRs / past sessions)
@@ -163,6 +167,7 @@ export { networkConnections } from './network-connections.ts';
 export { networkDnsLookup } from './network-dns-lookup.ts';
 export { networkPing } from './network-ping.ts';
 export { networkPortCheck } from './network-port-check.ts';
+export { notifyDesktop } from './notify-desktop.ts';
 export { postgresIsready } from './postgres-isready.ts';
 export { serviceJournal } from './service-journal.ts';
 export { serviceStatus } from './service-status.ts';

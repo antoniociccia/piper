@@ -162,6 +162,48 @@ export const MIGRATIONS: readonly Migration[] = [
         CHECK (kind IN (${AUDIT_KIND_SQL_LIST}));
     `,
   },
+  {
+    version: 3,
+    name: 'watch-tables',
+    // M3a — PIPER Watch. Persists watch runs, per-tick check results, and
+    // anomalies (with their diagnosis outcome). Detail/report columns are
+    // scrubbed at write time by watch-store.ts (same discipline as evidence).
+    up: `
+      CREATE TABLE watch_runs (
+        id             BIGSERIAL   PRIMARY KEY,
+        session_id     TEXT        NOT NULL REFERENCES sessions(id),
+        plan_name      TEXT        NOT NULL,
+        environment    TEXT        NOT NULL,
+        started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        stopped_at     TIMESTAMPTZ,
+        stopped_reason TEXT
+      );
+      CREATE INDEX watch_runs_session ON watch_runs (session_id, started_at DESC);
+
+      CREATE TABLE watch_check_results (
+        id              BIGSERIAL   PRIMARY KEY,
+        watch_run_id    BIGINT      NOT NULL REFERENCES watch_runs(id),
+        check_name      TEXT        NOT NULL,
+        executed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        outcome         TEXT        NOT NULL CHECK (outcome IN ('pass', 'expectation-failed', 'check-error')),
+        exit_code       INTEGER,
+        detail_scrubbed TEXT        NOT NULL DEFAULT ''
+      );
+      CREATE INDEX watch_check_results_run ON watch_check_results (watch_run_id, executed_at);
+
+      CREATE TABLE watch_anomalies (
+        id               BIGSERIAL   PRIMARY KEY,
+        watch_run_id     BIGINT      NOT NULL REFERENCES watch_runs(id),
+        check_name       TEXT        NOT NULL,
+        kind             TEXT        NOT NULL CHECK (kind IN ('expectation-failed', 'check-error')),
+        fired_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        diagnosis_status TEXT        NOT NULL DEFAULT 'pending'
+          CHECK (diagnosis_status IN ('pending', 'ready', 'skipped-budget', 'skipped-cooldown', 'skipped-no-diagnoser')),
+        diagnosis_report TEXT
+      );
+      CREATE INDEX watch_anomalies_run ON watch_anomalies (watch_run_id, fired_at DESC);
+    `,
+  },
 ];
 
 const MIGRATIONS_TABLE_DDL = `

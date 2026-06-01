@@ -6,6 +6,7 @@ import {
   dockerPs,
   logsTail,
   networkPortCheck,
+  notifyDesktop,
   registerBuiltins,
   sshConnect,
   systemDiskUsage,
@@ -366,5 +367,110 @@ describe('actions/builtin — docker.compose_up (mutate tier)', () => {
   test('argsSchema rejects service names with shell metacharacters', () => {
     expect(dockerComposeUp.argsSchema.safeParse({ ...baseArgs, service: 'web;ls' }).success).toBe(false);
     expect(dockerComposeUp.argsSchema.safeParse({ ...baseArgs, service: 'web bar' }).success).toBe(false);
+  });
+});
+
+describe('actions/builtin — notify.desktop', () => {
+  const ORIGINAL_PLATFORM = process.platform;
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+
+  function restorePlatform(): void {
+    Object.defineProperty(process, 'platform', { value: ORIGINAL_PLATFORM, configurable: true });
+  }
+
+  test('tier is read', () => {
+    expect(notifyDesktop.tier).toBe('read');
+  });
+
+  test('darwin: argv = [osascript, -e, script] containing display notification', () => {
+    setPlatform('darwin');
+    try {
+      const argv = notifyDesktop.buildCommand({ title: 'PIPER', message: 'hello world' }, ctx);
+      expect(argv[0]).toBe('osascript');
+      expect(argv[1]).toBe('-e');
+      expect(argv).toHaveLength(3);
+      const script = argv[2] ?? '';
+      expect(script).toContain('display notification');
+      expect(script).toContain('with title');
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  test('darwin: a message with quotes and backslashes is sanitized in the script', () => {
+    setPlatform('darwin');
+    try {
+      // buildCommand is called directly (bypassing the schema). The Layer-1
+      // sanitizer must still neutralize the breakout characters.
+      const argv = notifyDesktop.buildCommand(
+        { title: 'say "hi"', message: 'path\\to "x"' },
+        ctx,
+      );
+      const script = argv[2] ?? '';
+      // The only double quotes allowed are the 4 delimiters around the two
+      // sanitized literals: ...notification "<msg>" with title "<title>".
+      const quoteCount = (script.match(/"/g) ?? []).length;
+      expect(quoteCount).toBe(4);
+      // No backslashes survive into the AppleScript.
+      expect(script).not.toContain('\\');
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  test('darwin: AppleScript injection payload appears only as inert text', () => {
+    setPlatform('darwin');
+    try {
+      const payload = 'x" & (do shell script "touch /tmp/pwned") & "';
+      const argv = notifyDesktop.buildCommand({ title: 'PIPER', message: payload }, ctx);
+      const script = argv[2] ?? '';
+      // The live-code sequence that would break out of the string literal must
+      // NOT survive: every double quote from the payload has been replaced.
+      expect(script).not.toContain('" & (do shell script');
+      expect(script).not.toContain('do shell script "');
+      // Exactly the 4 delimiter quotes remain.
+      expect((script.match(/"/g) ?? []).length).toBe(4);
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  test('schema rejects args containing a double quote', () => {
+    expect(notifyDesktop.argsSchema.safeParse({ title: 'ok', message: 'has "quote"' }).success).toBe(false);
+    expect(notifyDesktop.argsSchema.safeParse({ title: 'has "quote"', message: 'ok' }).success).toBe(false);
+  });
+
+  test('schema rejects args containing a backslash', () => {
+    expect(notifyDesktop.argsSchema.safeParse({ title: 'ok', message: 'a\\b' }).success).toBe(false);
+  });
+
+  test('schema rejects control characters', () => {
+    expect(notifyDesktop.argsSchema.safeParse({ title: 'ok', message: 'line\nbreak' }).success).toBe(false);
+  });
+
+  test('schema rejects a title starting with a dash (notify-send flag injection)', () => {
+    expect(notifyDesktop.argsSchema.safeParse({ title: '--help', message: 'ok' }).success).toBe(false);
+  });
+
+  test('schema accepts plain printable text', () => {
+    expect(notifyDesktop.argsSchema.safeParse({ title: 'PIPER Watch', message: 'Check failed on staging' }).success).toBe(true);
+  });
+
+  test('linux: argv is notify-send with -- guard then title and message', () => {
+    setPlatform('linux');
+    try {
+      const argv = notifyDesktop.buildCommand({ title: 'PIPER', message: 'hello' }, ctx);
+      expect(argv[0]).toBe('notify-send');
+      expect(argv).toContain('--');
+      expect(argv).toContain('PIPER');
+      expect(argv).toContain('hello');
+      // -- must come before the title so a dash-leading title is never a flag.
+      expect(argv.indexOf('--')).toBeLessThan(argv.indexOf('PIPER'));
+    } finally {
+      restorePlatform();
+    }
   });
 });
