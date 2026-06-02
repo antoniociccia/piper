@@ -599,8 +599,19 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const argsScrubbedJson = scrubText(argsJson, userScrub);
     const timeoutMs = ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+    // The context/elevation actually used for the dry-run, execute, verify, and
+    // rollback hooks. Starts from what exec() decided, but the snapshot probe
+    // below may upgrade it to sudo IN PLACE (no recursion). The params stay
+    // untouched — only these locals change.
+    let effectiveCtx = actionCtx;
+    let effectiveElevation = elevation;
+
     // 1. Snapshot (best-effort; non-fatal if it fails — verify may still work).
+    //    It runs NON-elevated (the probe): on a sudo-only host this fails with a
+    //    permission-denied stderr, which we read below to offer reactive sudo.
     let snapshotOutput: string | undefined;
+    let snapshotStderr = '';
+    let snapshotExit = 0;
     if (action.buildSnapshotCommand !== undefined) {
       const snapArgv = action.buildSnapshotCommand(args, actionCtx);
       if (snapArgv.length > 0) {
@@ -610,14 +621,62 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         const snap = await runProcess(snapArgv, timeoutMs);
         await deps.db.query(`UPDATE audit_log SET exit_code = $1 WHERE id = $2`, [snap.exitCode, snapAudit]);
         snapshotOutput = scrubText(snap.stdout, userScrub);
-        await insertEvidence(ctx.sessionId, snapAudit, snapshotOutput, scrubText(snap.stderr, userScrub));
+        snapshotStderr = scrubText(snap.stderr, userScrub);
+        snapshotExit = snap.exitCode;
+        await insertEvidence(ctx.sessionId, snapAudit, snapshotOutput, snapshotStderr);
+      }
+    }
+
+    // Reactive sudo for mutations: if the read-only snapshot probe hit a
+    // permission boundary and the action is elevation-aware, offer sudo for the
+    // whole mutation (in place — no recursion, so the mutation proposal still
+    // fires exactly once afterwards).
+    if (
+      effectiveElevation === 'none' &&
+      deps.onElevationProposal !== undefined &&
+      detectPermissionDenied(snapshotStderr, snapshotExit)
+    ) {
+      const previewCtx: ActionExecContext = { ...actionCtx, elevation: 'sudo' };
+      const previewArgv = action.buildCommand(args, previewCtx);
+      if (argvCarriesSudo(previewArgv)) { // action genuinely honors elevation
+        const decision = await deps.onElevationProposal({
+          actionName: action.name,
+          tier: action.tier,
+          args,
+          commandScrubbed: scrubText(argvToShell(previewArgv), userScrub),
+          ...(environment === undefined ? {} : { environment }),
+          origin: 'reactive',
+          doubleConfirm: action.tier === 'mutate' && (deps.sudoDoubleConfirmMutate ?? true),
+        });
+        if (decision.kind !== 'reject') {
+          if (decision.kind === 'approve-remember' && action.tier !== 'destructive') {
+            rememberedSudo.add(sudoKey(environment?.name ?? '', action.name));
+          }
+          effectiveElevation = 'sudo';
+          effectiveCtx = previewCtx;
+          // Re-run the snapshot elevated so the pre-state (used by rollback) is real.
+          if (action.buildSnapshotCommand !== undefined) {
+            const snap2Argv = action.buildSnapshotCommand(args, effectiveCtx);
+            if (snap2Argv.length > 0) {
+              const snap2Audit = await insertAudit('mutate-snapshot', ctx.sessionId, action.name, argsScrubbedJson, {
+                commandScrubbed: scrubText(argvToShell(snap2Argv), userScrub),
+              });
+              const snap2 = await runProcess(snap2Argv, timeoutMs);
+              await deps.db.query(`UPDATE audit_log SET exit_code = $1 WHERE id = $2`, [snap2.exitCode, snap2Audit]);
+              snapshotOutput = scrubText(snap2.stdout, userScrub);
+              await insertEvidence(ctx.sessionId, snap2Audit, snapshotOutput, scrubText(snap2.stderr, userScrub));
+            }
+          }
+        }
+        // On reject: proceed non-elevated. The mutation will likely fail, but the
+        // user explicitly declined sudo — their choice, and the failure is reported.
       }
     }
 
     // 2. Dry-run (best-effort; shown to the user as the diff to approve).
     let dryRunOutput: string | undefined;
     if (action.buildDryRunCommand !== undefined) {
-      const dryArgv = action.buildDryRunCommand(args, actionCtx);
+      const dryArgv = action.buildDryRunCommand(args, effectiveCtx);
       if (dryArgv.length > 0) {
         const dryAudit = await insertAudit('mutate-dryrun', ctx.sessionId, action.name, argsScrubbedJson, {
           commandScrubbed: scrubText(argvToShell(dryArgv), userScrub),
@@ -630,11 +689,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     }
 
     // 3. Build the mutation command and emit the proposal.
-    const execArgv = action.buildCommand(args, actionCtx);
+    const execArgv = action.buildCommand(args, effectiveCtx);
     if (execArgv.length === 0) {
       return refuse(action.name, args, 'execution-failed', ctx, 'buildCommand returned empty argv');
     }
-    if (elevation === 'sudo' && !argvCarriesSudo(execArgv)) {
+    if (effectiveElevation === 'sudo' && !argvCarriesSudo(execArgv)) {
       return refuse(action.name, args, 'execution-failed', ctx, 'approved sudo but resolved command lacks sudo');
     }
     const commandScrubbed = scrubText(argvToShell(execArgv), userScrub);
@@ -714,7 +773,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     let rollbackOutput: string | undefined;
 
     if (action.buildVerifyCommand !== undefined) {
-      const verifyArgv = action.buildVerifyCommand(args, actionCtx);
+      const verifyArgv = action.buildVerifyCommand(args, effectiveCtx);
       if (verifyArgv.length > 0) {
         const verifyAudit = await insertAudit('mutate-verify', ctx.sessionId, action.name, argsScrubbedJson, {
           commandScrubbed: scrubText(argvToShell(verifyArgv), userScrub),
@@ -731,7 +790,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         );
 
         if (ver.exitCode !== 0 && action.buildRollbackCommand !== undefined) {
-          const rbArgv = action.buildRollbackCommand(args, actionCtx, snapshotOutput ?? '');
+          const rbArgv = action.buildRollbackCommand(args, effectiveCtx, snapshotOutput ?? '');
           if (rbArgv !== null && rbArgv.length > 0) {
             const rbAudit = await insertAudit('mutate-rollback', ctx.sessionId, action.name, argsScrubbedJson, {
               commandScrubbed: scrubText(argvToShell(rbArgv), userScrub),

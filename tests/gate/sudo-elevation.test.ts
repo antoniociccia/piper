@@ -579,4 +579,74 @@ describe('GATE: sudo re-validation, never-remember, and double-gating', () => {
     expect(mutationGateRan).toBe(true);
     await closeDb(dbx);
   });
+
+  test('reactive sudo for mutations: snapshot permission-denied → execute runs WITH sudo', async () => {
+    const { z } = await import('zod');
+    const { createCatalog } = await import('../../src/actions/catalog.ts');
+    const { createEnvironmentRegistry } = await import('../../src/environments/registry.ts');
+    const { createExecutor } = await import('../../src/exec/executor.ts');
+    const { elevateRemoteCommand } = await import('../../src/security/elevation.ts');
+    const dbx = await openDb();
+    const cat = createCatalog();
+    cat.register({
+      name: 'fake.mutate_docker',
+      tier: 'mutate',
+      description: 'mutate that needs sudo (snapshot denies unprivileged)',
+      argsSchema: z.object({ environment: z.string().optional() }),
+      // snapshot: read-only probe that prints permission-denied unprivileged.
+      buildSnapshotCommand: (_a, ctx) =>
+        (ctx.elevation ?? 'none') === 'sudo'
+          ? [...elevateRemoteCommand(['sh', '-c', 'echo snapshot-ok'], 'sudo')]
+          : ['sh', '-c', 'echo "permission denied" 1>&2; exit 1'],
+      buildCommand: (_a, ctx) => [...elevateRemoteCommand(['sh', '-c', 'echo up'], ctx.elevation ?? 'none')],
+      parseResult: (raw) => raw.stdout,
+    });
+    const reg = createEnvironmentRegistry(dbx);
+    await reg.upsert({ name: 'staging', host: 'h', sshUser: 'u' });
+    const sid = `t-${crypto.randomUUID()}`;
+    await dbx.query(`INSERT INTO sessions (id, config_snapshot_json) VALUES ($1, $2::jsonb)`, [sid, '{}']);
+    let elevReactive = false;
+    const executor = createExecutor({
+      db: dbx, catalog: cat, registry: reg,
+      onElevationProposal: async (p) => { if (p.origin === 'reactive') elevReactive = true; return { kind: 'approve-once' }; },
+      onMutationProposal: async () => ({ kind: 'approve-once' }),
+    });
+    try { await executor.exec('fake.mutate_docker', { environment: 'staging' }, { sessionId: sid }); } catch { /* verify may fail; we only assert sudo carried */ }
+    expect(elevReactive).toBe(true);
+    const audit = await dbx.query<{ command_scrubbed: string | null }>(
+      `SELECT command_scrubbed FROM audit_log WHERE session_id = $1 AND kind = 'mutate-execute'`, [sid]);
+    expect(audit.rows.some((r) => (r.command_scrubbed ?? '').includes('sudo'))).toBe(true);
+    await closeDb(dbx);
+  });
+
+  test('reactive sudo for mutations is NOT offered when the action ignores elevation', async () => {
+    const { z } = await import('zod');
+    const { createCatalog } = await import('../../src/actions/catalog.ts');
+    const { createEnvironmentRegistry } = await import('../../src/environments/registry.ts');
+    const { createExecutor } = await import('../../src/exec/executor.ts');
+    const dbx = await openDb();
+    const cat = createCatalog();
+    cat.register({
+      name: 'fake.mutate_plain',
+      tier: 'mutate',
+      description: 'mutate, snapshot denies, but ignores elevation',
+      argsSchema: z.object({ environment: z.string().optional() }),
+      buildSnapshotCommand: () => ['sh', '-c', 'echo "permission denied" 1>&2; exit 1'],
+      buildCommand: () => ['sh', '-c', 'echo up'], // never sudo
+      parseResult: (raw) => raw.stdout,
+    });
+    const reg = createEnvironmentRegistry(dbx);
+    await reg.upsert({ name: 'staging', host: 'h', sshUser: 'u' });
+    const sid = `t-${crypto.randomUUID()}`;
+    await dbx.query(`INSERT INTO sessions (id, config_snapshot_json) VALUES ($1, $2::jsonb)`, [sid, '{}']);
+    let elevProposed = false;
+    const executor = createExecutor({
+      db: dbx, catalog: cat, registry: reg,
+      onElevationProposal: async () => { elevProposed = true; return { kind: 'approve-once' }; },
+      onMutationProposal: async () => ({ kind: 'approve-once' }),
+    });
+    try { await executor.exec('fake.mutate_plain', { environment: 'staging' }, { sessionId: sid }); } catch { /* fine */ }
+    expect(elevProposed).toBe(false);
+    await closeDb(dbx);
+  });
 });
