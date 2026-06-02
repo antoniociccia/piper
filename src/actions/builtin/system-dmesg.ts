@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { buildSshArgvForEnv } from '../../exec/ssh.ts';
+import { elevateRemoteCommand } from '../../security/elevation.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
@@ -18,16 +19,31 @@ export interface DmesgResult {
 export const systemDmesg: Action<Args, DmesgResult> = {
   name: 'system.dmesg',
   tier: 'read',
+  // dmesg works without root when CAP_SYSLOG is granted (common on modern
+  // Linux). defaultElevation is 'none': the Executor proposes a sudo re-run
+  // via detectPermissionDenied if the unprivileged attempt fails.
+  defaultElevation: 'none',
   description:
     'Run `dmesg --color=never -T | tail -N` to inspect recent kernel ring buffer messages. Default 100 lines. Useful for OOM kills, hardware faults, driver issues.',
   argsSchema,
-  buildCommand: (args, ctx) => {
+  buildCommand: (_args, ctx) => {
     const env = requireEnv(ctx);
-    const n = args.lines ?? 100;
-    return buildSshArgvForEnv(env, [
-      'sh', '-c',
-      `dmesg --color=never -T 2>/dev/null | tail -${n} || sudo -n dmesg --color=never -T 2>/dev/null | tail -${n} || echo "dmesg unavailable (needs root or CAP_SYSLOG)"`,
-    ]);
+    const elevation = ctx.elevation ?? 'none';
+    // No shell plumbing here: no 2>/dev/null, no pipe, no fallback echo.
+    // Letting stderr and exit code reach the Executor unfiltered is what
+    // enables the reactive sudo trigger (detectPermissionDenied) to fire
+    // when dmesg is restricted by the kernel's CAP_SYSLOG policy.
+    // Line trimming is done in parseResult instead of shell `tail`.
+    const inner = elevateRemoteCommand(['dmesg', '--color=never', '-T'], elevation);
+    return buildSshArgvForEnv(env, inner);
   },
-  parseResult: (raw) => ({ raw: raw.stdout.trim() }),
+  parseResult: (raw, args) => {
+    const n = args.lines ?? 100;
+    const allLines = raw.stdout
+      .split('\n')
+      .map((l) => l.trimEnd())
+      .filter((l) => l.length > 0);
+    const trimmed = allLines.slice(-n);
+    return { raw: trimmed.join('\n') };
+  },
 };

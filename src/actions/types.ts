@@ -2,6 +2,7 @@ import type { z } from 'zod';
 
 import type { Environment } from '../environments/types.ts';
 import type { SessionId } from '../memory/types.ts';
+import type { Elevation } from '../security/elevation.ts';
 
 export type Tier = 'read' | 'mutate' | 'destructive';
 
@@ -10,6 +11,13 @@ export const ALL_TIERS: readonly Tier[] = ['read', 'mutate', 'destructive'];
 export interface ActionExecContext {
   readonly sessionId: SessionId;
   readonly environment?: Environment;
+  /**
+   * Effective privilege elevation for THIS invocation, decided by the Executor
+   * (action's defaultElevation, a session-remembered rule, or a reactive sudo
+   * re-run). Actions route their elevatable command through
+   * `elevateRemoteCommand(inner, ctx.elevation ?? 'none')`. Undefined = 'none'.
+   */
+  readonly elevation?: Elevation;
 }
 
 export interface RawExecOutput {
@@ -43,6 +51,11 @@ export interface RawExecOutput {
 export interface Action<Args = unknown, Result = unknown> {
   readonly name: string;
   readonly tier: Tier;
+  /**
+   * The elevation this action needs by default (e.g. iptables → 'sudo'). The
+   * Executor proposes it; it is still gated. Omitted = none.
+   */
+  readonly defaultElevation?: Elevation;
   readonly description: string;
   readonly argsSchema: z.ZodType<Args>;
   buildCommand(args: Args, ctx: ActionExecContext): readonly string[];
