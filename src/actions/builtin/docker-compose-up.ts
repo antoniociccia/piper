@@ -64,7 +64,7 @@ export const dockerComposeUp: Action<Args, DockerComposeUpResult> = {
   name: 'docker.compose_up',
   tier: 'mutate',
   description:
-    'Bring up a docker-compose project (or a single service of it) on the target host. Re-creates containers whose image or config changed since the last up. Use this to apply a redeploy AFTER you have confirmed the compose file is correct via the dry-run preview.',
+    'Bring up a docker-compose project (or a single service of it) on the target host: re-creates containers whose image or config changed since the last up. Propose this DIRECTLY when the user asks to bring the stack up / (re)deploy / "compose up" — the mutation flow shows the user a dry-run preview + pre-state snapshot and asks for approval before anything runs, so you do NOT need a separate read action to "check first".',
   argsSchema,
 
   buildSnapshotCommand: (args, ctx) => {
