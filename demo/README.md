@@ -168,8 +168,11 @@ specific. Use them in this order for the best storytelling.
 
 - The container hostname is `app-host-01` — picked so logs and prompts reference
   a name that looks production-ish without naming any real product.
-- The user is `deploy`, no password, no sudo prompts. Sshd is hardened: no
-  passwords, no root login, no agent forwarding.
+- The user is `deploy`, key-auth only, with **passwordless sudo** (NOPASSWD).
+  The docker shim refuses non-root callers — exactly like a real Docker
+  socket — so PIPER's reactive-sudo flow has a realistic boundary to hit and
+  `sudo -n` is the way through it. Sshd is hardened: no passwords, no root
+  login, no agent forwarding.
 - All ports outside `2222` stay closed. The demo host does not phone home.
 - Generated keys live under `demo/keys/` and `demo/host-keys/` and are
   gitignored. They survive `teardown.sh` (so the next `setup.sh` is fast) and
@@ -182,9 +185,20 @@ specific. Use them in this order for the best storytelling.
 To exercise PIPER's `docker.*` actions against the demo host without bringing
 up a real Docker daemon inside the container, we ship a tiny shell script at
 `fakefs/usr/local/bin/piper-docker-shim`. It hardcodes the output of `docker
-ps / logs / inspect / compose ps` for the four planted demo containers. A
-symlink at `/usr/local/bin/docker` resolves PIPER's `docker ps …` argv to
-the shim.
+ps / logs / inspect / compose ps|up|restart|down` for the four planted demo
+containers. A symlink at `/usr/local/bin/docker` resolves PIPER's
+`docker ps …` argv to the shim.
+
+Two behaviours make the demo realistic:
+
+- **Root gate.** Run as a non-root user, every subcommand fails with the
+  classic `permission denied … /var/run/docker.sock` error (exit 1) — which
+  is what triggers PIPER's reactive-sudo proposal. Under `sudo` it works.
+- **Restart state.** `compose restart` (and `compose up`) drop a marker at
+  `/tmp/piper-demo-restarted`; from then on `compose ps` reports every
+  service running, so PIPER's verify step sees the stack healthy.
+  `scripts/record-demo.sh` clears the marker before each take so recordings
+  always start from the broken state (worker + redis exited).
 
 **It is not Docker.** It contains no Docker source code, runs no engine,
 manages no containers. It just prints static text in the shape PIPER expects.

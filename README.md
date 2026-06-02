@@ -37,14 +37,17 @@ the LLM proposes, deterministic code validates, the human approves anything that
 
 <div align="center">
 
-<img src="docs/assets/demo.gif" alt="PIPER diagnosing a fake production host — analyze, drill into anomalies, propose fixes, refuse to mutate" width="900"/>
+<img src="docs/assets/demo.gif" alt="PIPER restarting a broken compose stack — proposes the real mutation, hits the docker permission boundary, asks for sudo with the verbatim command, executes after approval, verifies every service came back" width="900"/>
 
 </div>
 
-PIPER pulls the relevant runbook from its knowledge base, runs read-only
-diagnostics over SSH, finds the planted issues, proposes fixes — and refuses
-to apply them, because M1 is read-only. The LLM proposes; the deterministic
-gate validates; the human stays in the loop.
+*"Restart the stack."* PIPER proposes the real `docker compose restart`, hits
+the host's permission boundary, asks for sudo showing the exact command that
+will run elevated, shows the pre-state snapshot, and only executes after
+approval — then verifies every service came back up. Even the follow-up
+read-only check gets its own gate: an approval for one command never carries
+over to a different one. The LLM proposes; the deterministic gate validates;
+the human stays in the loop.
 
 ---
 

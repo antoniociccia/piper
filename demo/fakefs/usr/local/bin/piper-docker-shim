@@ -4,9 +4,11 @@
 # ============================================================================
 #
 # This script is a static-output emulator that mimics the SHAPE of `docker`'s
-# read-only subcommands (`ps`, `logs`, `inspect`, `compose ps`) so PIPER can
-# be demonstrated against a host that "looks like" a Docker-based deployment
-# without bringing up a real Docker daemon inside the demo container.
+# subcommands (`ps`, `logs`, `inspect`, `compose ps/config/up/restart/down`)
+# so PIPER can be demonstrated against a host that "looks like" a Docker-based
+# deployment without bringing up a real Docker daemon inside the demo
+# container. Like a real production socket, it refuses non-root callers — so
+# PIPER's reactive-sudo flow has a realistic permission boundary to hit.
 #
 # It does NOT contain any Docker source code, does NOT manage any containers,
 # does NOT exec any Docker engine. It prints fabricated, hard-coded strings.
@@ -33,6 +35,24 @@
 #                                                     worker death)
 
 set -u
+
+# --- root gate ---------------------------------------------------------------
+# Real production hosts gate the Docker socket behind root / the docker group.
+# The demo deploy user is NOT in that group, so every docker command fails with
+# the classic socket permission error unless run under sudo. This is what
+# exercises PIPER's reactive-sudo flow (v0.4.3): the read-only snapshot probe
+# hits this boundary, PIPER offers elevation, and the whole mutation re-runs
+# with `sudo -n`.
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.45/containers/json\": dial unix /var/run/docker.sock: connect: permission denied" >&2
+  exit 1
+fi
+
+# --- restart state -----------------------------------------------------------
+# `compose restart` drops a marker; `compose ps` reads it so the stack shows
+# every service running after a restart. Cleared by scripts/record-demo.sh
+# before each take so recordings start from the broken state.
+RESTART_MARKER="/tmp/piper-demo-restarted"
 
 # --- inspect helpers --------------------------------------------------------
 
@@ -187,11 +207,12 @@ case "${1:-}" in
     exit 0
     ;;
   compose)
-    # Demo stub for the docker.compose_up M2 flow:
+    # Demo stub for the docker.compose_up / docker.compose_restart flows:
     #   config              → renders the merged compose file (read-only)
-    #   ps                  → pretty-printed table (existing behaviour)
+    #   ps                  → pretty-printed table (post-restart aware)
     #   ps --format json    → JSON, one row per line, for snapshot/verify
     #   up [-d] [--remove-orphans] [service]   → fakes a successful redeploy
+    #   restart [service]   → fakes a stack restart + marks services running
     #   down [service]      → fakes a graceful stop
     # We deliberately ignore -f <path> so any project_dir works.
     shift
@@ -221,6 +242,26 @@ case "${1:-}" in
         exit 0
         ;;
       ps)
+        if [[ -f "$RESTART_MARKER" ]]; then
+          # Post-restart state: every declared service is back up.
+          if [[ "$json_format" -eq 1 ]]; then
+            cat <<'EOF'
+{"Name":"orderly-web-1","Service":"web","Image":"registry.example/orderly-web:1.4.2","State":"running","Status":"Up 12 seconds"}
+{"Name":"orderly-nginx-1","Service":"nginx","Image":"nginx:1.27-alpine","State":"running","Status":"Up 11 seconds"}
+{"Name":"orderly-worker-1","Service":"worker","Image":"registry.example/orderly-worker:1.4.2","State":"running","Status":"Up 10 seconds"}
+{"Name":"orderly-redis-1","Service":"redis","Image":"redis:7.4-alpine","State":"running","Status":"Up 12 seconds"}
+EOF
+            exit 0
+          fi
+          cat <<'EOF'
+NAME                COMMAND                  SERVICE     STATUS         PORTS
+orderly-web-1       "node dist/server.js"    web         running        0.0.0.0:8080->8080/tcp
+orderly-nginx-1     "nginx -g 'daemon ..."   nginx       running        0.0.0.0:80->80/tcp
+orderly-worker-1    "node dist/worker.js"    worker      running
+orderly-redis-1     "docker-entrypoint.s..." redis       running        6379/tcp
+EOF
+          exit 0
+        fi
         if [[ "$json_format" -eq 1 ]]; then
           # JSON lines — matches `docker compose ps --format json` v2.
           cat <<'EOF'
@@ -240,8 +281,28 @@ orderly-redis-1     "docker-entrypoint.s..." redis       exited (137)
 EOF
         exit 0
         ;;
+      restart)
+        # `docker compose restart` — the docker.compose_restart mutation
+        # (v0.4.4). Cycles containers without recreating them. Marks the
+        # stack as restarted so subsequent `ps` (the verify step) reports
+        # every service running.
+        touch "$RESTART_MARKER" 2>/dev/null || true
+        chmod 666 "$RESTART_MARKER" 2>/dev/null || true
+        if [[ -n "$service" && "$service" != "restart" ]]; then
+          echo " ✔ Container orderly-${service}-1  Started"
+        else
+          echo " ✔ Container orderly-redis-1     Started"
+          echo " ✔ Container orderly-web-1       Started"
+          echo " ✔ Container orderly-worker-1    Started"
+          echo " ✔ Container orderly-nginx-1     Started"
+        fi
+        exit 0
+        ;;
       up)
         # Simulate a redeploy. If a service is given, scope output to it.
+        # Like restart, a successful `up` leaves every service running.
+        touch "$RESTART_MARKER" 2>/dev/null || true
+        chmod 666 "$RESTART_MARKER" 2>/dev/null || true
         if [[ -n "$service" ]]; then
           echo " ✔ Container orderly-${service}-1  Started"
         else

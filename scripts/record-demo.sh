@@ -51,6 +51,17 @@ if [ -d "$DEMO_DATA" ]; then
   rm -rf "$DEMO_DATA"
 fi
 
+# Reset the demo host's restart marker so the stack starts in the broken
+# state (worker + redis exited). The marker is what `compose restart` flips.
+echo "[record] resetting demo host restart state"
+ssh -q -i demo/keys/piper-demo \
+    -o UserKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=no \
+    -p 2222 deploy@127.0.0.1 'sudo -n rm -f /tmp/piper-demo-restarted' || {
+  echo "[record] WARNING: could not reset restart marker (old demo image without sudo?)"
+  echo "[record] rebuild with: docker compose -f demo/docker-compose.yml up -d --build"
+}
+
 # --- Recording script — what to type once PIPER starts ----------------------
 cat <<'EOF'
 
@@ -60,18 +71,24 @@ cat <<'EOF'
   Once PIPER opens, type EACH prompt and wait for the reply to finish before
   moving on. Take your time — asciinema will compress idle gaps later.
 
-  Prompt order — analyze → propose → redeploy (the M2 money shot):
+  Prompt order — restart + reactive sudo (the v0.4.x money shot):
 
     1.  /env add demo deploy@localhost:2222 --key demo/keys/piper-demo
-    2.  analyze demo
-    3.  the worker is exited and redis OOM'd — restart the stack
-        (planner proposes 'docker.compose_up'; HUMAN approval panel appears)
+    2.  restart the compose stack at /opt/orderly on demo — redis OOM'd
+        and the worker is down
+        (planner proposes 'docker.compose_restart'; approval panel appears)
         → press 'y' on the plan-approval panel
-        → MAGENTA MUTATION PANEL appears with verbatim command, dry-run
-          diff (compose config), pre-state snapshot, and the [a]/[r]/[n] row
-        → press 'a' (approve once) — execute + verify run, services come back
-    4.  /memory                  (press Esc / Enter / q when done viewing)
-    5.  /quit
+        → the read-only snapshot probe hits "permission denied … Docker
+          daemon socket" → SUDO ELEVATION PANEL appears
+        → approve sudo — the whole mutation re-runs elevated
+        → MAGENTA MUTATION PANEL appears with the verbatim 'sudo -n docker
+          compose … restart' command, dry-run, pre-state snapshot, and the
+          [a]/[r]/[n] row
+        → press 'a' (approve once) — execute + verify run, every service
+          comes back up
+    3.  is everything running now?
+        (read-only follow-up; grounded answer citing compose ps)
+    4.  /quit
 
   Tip: don't worry about typos — re-run the script to redo the take.
   Tip: terminal recommended size 120×32 — wider feels cinematic, ≥32 rows

@@ -16,13 +16,18 @@ RUN apt-get update && \
       net-tools \
       less \
       iputils-ping \
+      sudo \
       tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /run/sshd
 
-# Standard "deploy" user. Key-auth only.
+# Standard "deploy" user. Key-auth only. Passwordless sudo (NOPASSWD) so
+# PIPER's reactive `sudo -n` elevation works without a TTY password prompt —
+# the docker shim refuses non-root callers, and sudo is the escape hatch.
 RUN useradd -m -s /bin/bash -G sudo deploy && \
-    passwd -l deploy
+    passwd -l deploy && \
+    echo 'deploy ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/deploy && \
+    chmod 440 /etc/sudoers.d/deploy
 
 # Pinned host keys: generated once by demo/setup.sh and baked into the image
 # so the fingerprint stays stable across rebuilds.
@@ -51,8 +56,10 @@ COPY fakefs/var/log/nginx/ /var/log/nginx/
 COPY fakefs/usr/local/sbin/demo-entrypoint.sh /usr/local/sbin/demo-entrypoint.sh
 
 # `piper-docker-shim` — DEMO STUB. NOT DOCKER. Static-output emulator that
-# mimics the SHAPE of read-only `docker ps / logs / inspect / compose ps` so
+# mimics the SHAPE of `docker ps / logs / inspect / compose ps|up|restart` so
 # PIPER's catalog can target the demo host without a real Docker daemon.
+# It refuses non-root callers (like a real Docker socket), which is what
+# triggers PIPER's reactive-sudo proposal during the demo.
 # See the header of demo/fakefs/usr/local/bin/piper-docker-shim for the
 # trademark / fair-use disclosure. A `docker` symlink is provided ONLY so
 # PIPER's argv (`docker ps …`) resolves; the shim never claims to BE Docker.

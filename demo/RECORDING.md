@@ -67,6 +67,35 @@ The script:
 
 Type each one, wait for PIPER to finish, then the next.
 
+**Current take — restart + reactive sudo (v0.4.x):**
+
+| # | Prompt                                                                 | What it shows                                                         |
+|---|------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| 1 | `/env add demo deploy@localhost:2222 --key demo/keys/piper-demo`       | Adding an SSH environment                                             |
+| 2 | `restart the compose stack at /opt/orderly on demo — redis OOM'd and the worker is down` | The whole v0.4.x flow, see breakdown below            |
+| 3 | `is everything running now?`                                           | Read-only follow-up; elevation already remembered for the session     |
+| 4 | `/quit`                                                                | Clean exit                                                            |
+
+Breakdown of what happens during prompt #2 (all on camera):
+
+1. The planner proposes **`docker.compose_restart`** (mutate) — not a read.
+   Approve the plan with `y`.
+2. The read-only **snapshot probe** runs without sudo and hits
+   `permission denied … Docker daemon socket` → the **sudo elevation panel**
+   appears. Choose **remember for this session** — it's env-scoped, and it
+   makes the follow-up read in prompt #3 elevate without re-asking.
+3. The **magenta mutation panel** appears: verbatim
+   `sudo -n docker compose -f /opt/orderly/docker-compose.yml restart`,
+   dry-run output, pre-state snapshot (worker + redis exited). Press `a`
+   (approve once).
+4. Execute + verify run. Verify's `compose ps` shows every service running.
+
+That sequence is the money shot: *"PIPER hits a permission wall, asks for
+sudo, shows you the exact command, and only then touches the host."*
+
+<details>
+<summary>Previous take — read-only diagnosis (M1/M2, kept for reference)</summary>
+
 | # | Prompt                                                                 | What it shows                                                         |
 |---|------------------------------------------------------------------------|-----------------------------------------------------------------------|
 | 1 | `/env add demo deploy@localhost:2222 --key demo/keys/piper-demo`       | Adding an SSH environment                                             |
@@ -77,8 +106,12 @@ Type each one, wait for PIPER to finish, then the next.
 | 6 | `/memory` then Esc                                                     | Knowledge base viewer — proves the RAG is real                        |
 | 7 | `/quit`                                                                | Clean exit                                                            |
 
-That last prompt #4 is the money shot: it lets you say in voice-over / caption
-*"PIPER proposes, the human approves — by design."*
+</details>
+
+> **Note:** since the reactive-sudo demo update, `analyze demo` will hit the
+> docker permission boundary on the `docker.*` read actions and propose sudo
+> for those too. That's by design (v0.4.0 gates *every* sudo, reads included) —
+> just be ready for the extra panel if you use the old prompt list.
 
 ---
 
@@ -118,12 +151,14 @@ is the source of truth; the GIF can always be re-derived from it.
 
 Short version:
 
-> A senior SRE's first 30 seconds — automated.
+> "Restart the stack." Three approval gates later, it's done — and you read
+> every command before it ran.
 
 Longer version:
 
-> PIPER takes a vague question (*analyze demo*), pulls in the relevant
-> runbook from its knowledge base, runs read-only diagnostics over SSH,
-> finds the planted issues, and proposes fixes — without ever mutating the
-> host. The LLM proposes; the deterministic gate validates; the human stays
-> in the loop.
+> PIPER turns *"restart the stack"* into a gated mutation: it proposes the
+> real `docker compose restart`, hits the host's permission boundary, asks
+> for sudo (showing exactly what will run elevated), shows the verbatim
+> command + pre-state snapshot, and only executes after approval — then
+> verifies every service came back. The LLM proposes; the deterministic
+> gate validates; the human stays in the loop.
