@@ -6,6 +6,21 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.4.2] — 2026-06-02
+
+### Fixed
+
+- Answer metrics now render as box-drawn, column-aligned ASCII tables. A
+  markdown table is detected and each column padded to its widest cell, so the
+  pipes line up in the terminal instead of landing at ragged positions. The
+  synthesizer is asked for one `[ev-N]` citation per row (last cell), not one
+  per cell.
+- The planner now proposes the matching **mutate** action when the user names a
+  state-changing operation ("fai un docker compose up", "restart X",
+  "redeploy") instead of running a read (`docker.compose_ps`) and reporting
+  "already running, no change needed" — which silently refused the instruction.
+  The mutation's own dry-run + snapshot + approval still gates execution.
+
 ## [0.4.1] — 2026-06-02
 
 ### Fixed — Sudo elevation
