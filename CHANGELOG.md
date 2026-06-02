@@ -6,6 +6,22 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.4.3] — 2026-06-02
+
+### Fixed
+
+- **Mutations can now elevate.** On a host where docker needs sudo,
+  `docker.compose_up` failed: the execute ran without sudo → permission denied →
+  verify failed → rollback. The reactive sudo trigger now also covers the
+  mutation flow — the read-only snapshot is used as a permission probe, and if
+  it hits a permission boundary on an elevation-aware action, PIPER offers sudo
+  for the whole mutation (in place; the mutation approval still fires once
+  afterwards). `destructive + sudo` is still never remembered.
+- A plan where every step fails (e.g. a mutation whose verify failed and rolled
+  back) now renders a **grounded failure report** — each failed action and its
+  reason, plus a concrete next step for the common docker-needs-sudo case —
+  instead of aborting with the cryptic "gather-empty: no evidence to synthesize".
+
 ## [0.4.2] — 2026-06-02
 
 ### Fixed
