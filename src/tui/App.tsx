@@ -1559,57 +1559,40 @@ export function App(deps: AppDeps): JSX.Element {
             />
           )}
           {/*
-            Status bar — three quiet rows under a thin dim separator. The
-            separator is the visual anchor that says "this is where PIPER
-            ends and the meta starts"; the rows are short enough that none
-            of them ever wraps on a sane terminal (≤ ~100 chars at full
-            content), so the alien mascot stays anchored to the top-left
-            of the footer where the user expects it.
+            Status bar — ONE row under a thin dim separator, then a quiet
+            keybinding hint. Components are ordered by importance, left→right:
 
-              ▔▔▔▔▔▔▔▔▔▔▔▔▔ thin separator ▔▔▔▔▔▔▔▔▔▔▔▔▔
-               Y(◐ ◐)Y  PIPER  ·  demo audit               HUMAN ▮
-               $0.0123  ·  ◆ deepseek-v4-pro  $4.32 left  ·  ▮ 12k/128k █████░░░░░
-               Shift+Tab mode · Ctrl+O reasoning · Esc clear · /: cmds
+              ─────────────────────────────────────────────────────────────
+               Y(◐ ◐)Y  deepseek-v4-pro   HUMAN   ·  $0.0123 · 12k/128k ███░ · ◆ $4.32
+               Shift+Tab mode · Ctrl+O reasoning · Esc clear · / cmds · Ctrl+C exit
+
+            The model name sits next to the mascot in light grey; the HUMAN/YOLO
+            badge is an inverse chip so the mode is unmistakable at a glance.
           */}
           <Box marginTop={0}>
             <Text dimColor>{'─'.repeat(60)}</Text>
           </Box>
           <Box>
             <AlienFace busy={state.busy} bold />
-            <Text dimColor>  </Text>
-            <Text bold color="cyan">PIPER</Text>
-            <Text dimColor>  ·  </Text>
-            {state.sessionTitle !== null ? (
-              <Text color="cyan">{truncate(state.sessionTitle, 40)}</Text>
-            ) : (
-              <Text dimColor>session {currentSessionId.slice(0, 8)}…</Text>
-            )}
-            <Text dimColor>     </Text>
-            <Text bold color={state.executionMode === 'yolo' ? 'red' : 'green'}>
-              {state.executionMode === 'yolo' ? 'YOLO ▮' : 'HUMAN ▮'}
-            </Text>
-            {!state.showReasoning && (
-              <>
-                <Text dimColor>  ·  </Text>
-                <Text color="magenta">reasoning hidden</Text>
-              </>
-            )}
-          </Box>
-          <Box>
+            <Text> </Text>
+            <Text color="gray"> {shortenModelName(currentClient.modelId)}</Text>
+            <Text>   </Text>
+            <ModeBadge mode={state.executionMode} />
+            <Text dimColor>   ·  </Text>
             <Text color="yellow">${state.costUsd.toFixed(4)}</Text>
             {deps.maxSessionCostUsd !== undefined && (
               <Text dimColor>{`/$${deps.maxSessionCostUsd.toFixed(2)}`}</Text>
             )}
             <Text dimColor>  ·  </Text>
-            <ModelBadge client={currentClient} credit={state.remoteCredit} />
-            <Text dimColor>  ·  </Text>
             <TokenMeter
               tokensUsed={state.tokensUsed}
               modelLimit={currentClient.capabilities.maxContextTokens}
             />
+            <CreditTail client={currentClient} credit={state.remoteCredit} />
+            {!state.showReasoning && <Text color="magenta">  ·  reasoning hidden</Text>}
           </Box>
           <Text dimColor>
-            Shift+Tab mode · Ctrl+O reasoning · Esc clear · /: cmds · Ctrl+C exit
+            Shift+Tab mode · Ctrl+O reasoning · Esc clear · / cmds · Ctrl+C exit
           </Text>
         </Box>
       )}
@@ -1706,54 +1689,65 @@ function shortenModelName(id: string): string {
   return slashIdx === -1 ? id : id.slice(slashIdx + 1);
 }
 
-function truncate(s: string, max: number): string {
-  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+/** HUMAN / YOLO mode as an inverse chip — unmistakable at a glance. */
+function ModeBadge({ mode }: { mode: 'human' | 'yolo' }): JSX.Element {
+  if (mode === 'yolo') {
+    return (
+      <Text backgroundColor="red" color="white" bold>
+        {' YOLO '}
+      </Text>
+    );
+  }
+  return (
+    <Text backgroundColor="green" color="black" bold>
+      {' HUMAN '}
+    </Text>
+  );
 }
 
-function ModelBadge({
+/**
+ * Trailing credit indicator for the status row. The model NAME now lives next
+ * to the mascot, so this shows only the provider dot + remaining balance.
+ */
+function CreditTail({
   client,
   credit,
 }: {
   client: ModelClient;
   credit: RemoteCredit | null;
 }): JSX.Element {
-  const name = shortenModelName(client.modelId);
-  // Compact, no `mdl=` prefix. The bullet is the visual anchor.
   if (client.isLocal) {
     return (
       <Text>
-        <Text color="green">◆ </Text>
-        <Text color="green">{name}</Text>
+        <Text dimColor>{'  ·  '}</Text>
+        <Text color="green">◆ local</Text>
       </Text>
     );
   }
   if (credit === null) {
     return (
       <Text>
-        <Text color="magenta">◆ </Text>
-        <Text color="magenta">{name}</Text>
+        <Text dimColor>{'  ·  '}</Text>
+        <Text color="magenta">◆</Text>
       </Text>
     );
   }
   const remaining = credit.remaining;
-  const usage = credit.totalUsage.toFixed(2);
   if (remaining === null) {
     return (
       <Text>
+        <Text dimColor>{'  ·  '}</Text>
         <Text color="magenta">◆ </Text>
-        <Text color="magenta">{name}</Text>
-        <Text dimColor>  used ${usage}</Text>
+        <Text dimColor>used ${credit.totalUsage.toFixed(2)}</Text>
       </Text>
     );
   }
   const lowBalance = remaining < 1;
   return (
     <Text>
+      <Text dimColor>{'  ·  '}</Text>
       <Text color="magenta">◆ </Text>
-      <Text color="magenta">{name}</Text>
-      <Text dimColor>  </Text>
       <Text color={lowBalance ? 'red' : 'green'}>${remaining.toFixed(2)}</Text>
-      <Text dimColor> left</Text>
     </Text>
   );
 }

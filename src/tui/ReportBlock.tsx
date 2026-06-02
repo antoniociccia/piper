@@ -1,56 +1,83 @@
 import { Box, Text } from 'ink';
+import type { JSX } from 'react';
 
 import { AlienFace } from './AlienFace.tsx';
+import { classifyLine, type InlineSegment } from './report-markdown.ts';
 
 /**
  * Conversational answer block — used both for the LIVE streaming reply (in
  * App.tsx) and for COMMITTED reports in the scrollback (Report.tsx).
  *
- * Visual rules:
- *   - One `▌` glyph per PARAGRAPH (block of consecutive non-empty lines),
- *     not per line. Looks like an inline pull-quote marker, not a CSV.
- *   - Colour CYCLES through the paragraphs (green → cyan → magenta → yellow)
- *     so adjacent paragraphs are visually distinct.
- *   - When Ink wraps a long paragraph, the wrap continues from column 0 (no
- *     indentation under the ▌ glyph). This is the natural behaviour when the
- *     ▌ + paragraph text are nested children of a SINGLE outer `<Text>`.
- *   - Empty lines between paragraphs become a single `marginBottom={1}` gap.
+ * Aesthetic: clean markdown-flavoured prose, NO per-line/per-paragraph vertical
+ * bars and NO colour cycling (both read as an ugly alternating-row "table").
+ * The answer is set apart only by a one-column left gutter and the mascot at
+ * the top. Light inline markdown is honoured (see report-markdown.ts):
+ * `#`/`##`/`###` → bold cyan, `- `/`* ` → `• `, `**bold**`, `` `code` `` →
+ * yellow, `[ev-N]` citations → dim.
  *
- * The dynamic→static transition (streaming buffer → committed scrollback)
- * uses the same component, so the layout is character-position-identical.
+ * The dynamic→static transition (streaming buffer → committed scrollback) uses
+ * the same component, so the layout is character-position-identical.
  */
-const PARAGRAPH_COLORS = ['green', 'cyan', 'magenta', 'yellow'] as const;
 
 interface ReportBlockProps {
   readonly lines: readonly string[];
   /** Show the animated alien mascot at the top (used while streaming). */
   readonly withMascot?: boolean;
   /**
-   * Lock the mascot + prefix to one colour:
+   * Lock the mascot to one colour:
    *   - 'green'  → verified, committed
    *   - 'yellow' → ungrounded but surfaced
-   * When undefined, colours cycle (used for the live stream).
+   * When undefined, the mascot colour-cycles (used for the live stream).
    */
   readonly mascotColor?: 'green' | 'yellow';
-  /** Append the blinking-cursor block at the end of the last paragraph. */
+  /** Append the blinking-cursor block at the end of the last line. */
   readonly withCursor?: boolean;
 }
 
-function groupParagraphs(lines: readonly string[]): string[] {
-  const out: string[] = [];
-  let current: string[] = [];
-  for (const line of lines) {
-    if (line.trim() === '') {
-      if (current.length > 0) {
-        out.push(current.join('\n'));
-        current = [];
-      }
-    } else {
-      current.push(line);
-    }
+function Inline({ segments }: { segments: readonly InlineSegment[] }): JSX.Element {
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.kind === 'bold') return <Text key={i} bold>{seg.text}</Text>;
+        if (seg.kind === 'code') return <Text key={i} color="yellow">{seg.text}</Text>;
+        if (seg.kind === 'citation') return <Text key={i} dimColor>{seg.text}</Text>;
+        return <Text key={i}>{seg.text}</Text>;
+      })}
+    </>
+  );
+}
+
+function Line({ raw, cursor }: { raw: string; cursor: boolean }): JSX.Element {
+  const node = classifyLine(raw);
+  const tail = cursor ? <Text inverse> </Text> : null;
+
+  if (node.kind === 'blank') return <Text>{tail}</Text>;
+
+  if (node.kind === 'heading') {
+    return (
+      <Text bold color="cyan">
+        <Inline segments={node.segments} />
+        {tail}
+      </Text>
+    );
   }
-  if (current.length > 0) out.push(current.join('\n'));
-  return out;
+
+  if (node.kind === 'bullet') {
+    return (
+      <Text>
+        <Text color="cyan">{'• '}</Text>
+        <Inline segments={node.segments} />
+        {tail}
+      </Text>
+    );
+  }
+
+  return (
+    <Text>
+      <Inline segments={node.segments} />
+      {tail}
+    </Text>
+  );
 }
 
 export function ReportBlock({
@@ -59,36 +86,21 @@ export function ReportBlock({
   mascotColor,
   withCursor = false,
 }: ReportBlockProps): JSX.Element {
-  const paragraphs = groupParagraphs(lines);
+  const lastIndex = lines.length - 1;
   return (
-    <Box flexDirection="column" marginY={1}>
+    <Box flexDirection="column" marginY={1} paddingLeft={1}>
       {withMascot && (
-        <Box marginBottom={1}>
-          <AlienFace busy={mascotColor === undefined} bold {...(mascotColor === undefined ? {} : { color: mascotColor })} />
+        <Box marginBottom={1} marginLeft={-1}>
+          <AlienFace
+            busy={mascotColor === undefined}
+            bold
+            {...(mascotColor === undefined ? {} : { color: mascotColor })}
+          />
         </Box>
       )}
-      {paragraphs.map((para, i) => {
-        const color = mascotColor ?? PARAGRAPH_COLORS[i % PARAGRAPH_COLORS.length] ?? 'green';
-        const isLast = i === paragraphs.length - 1;
-        return (
-          <Box key={i} marginBottom={isLast ? 0 : 1}>
-            {/*
-              Both the ▌ marker and the paragraph body live inside a SINGLE
-              outer <Text>. That's the trick: Ink treats the whole thing as
-              one wrappable string, so the wrap inherits the left edge of
-              the outer <Box> (column 0) instead of indenting under the
-              prefix. Trying to do this with two sibling <Text>s in a row
-              <Box> wraps with a 2-char indent, which the user explicitly
-              flagged as ugly.
-            */}
-            <Text>
-              <Text color={color} bold>{'▌ '}</Text>
-              {para}
-              {withCursor && isLast ? <Text inverse> </Text> : null}
-            </Text>
-          </Box>
-        );
-      })}
+      {lines.map((raw, i) => (
+        <Line key={i} raw={raw} cursor={withCursor && i === lastIndex} />
+      ))}
     </Box>
   );
 }

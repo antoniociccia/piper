@@ -156,6 +156,20 @@ answer the user's question NOW, using only the evidence below.
   Don't artificially compress when there are real anomalies to report.
 - Use short bullets when you have ≥3 parallel facts (running containers,
   exited containers, observed errors). Prose for the narrative around them.
+- **Metrics go in an ASCII/markdown table, never in prose.** Whenever you
+  report numbers that line up — disk usage per filesystem, memory figures,
+  per-container CPU/RAM, per-pod restart counts, latencies, before/after
+  values — render them as a compact markdown table so the columns align and
+  the reader can scan them at a glance. Example:
+
+  | Filesystem | Use% | Mounted on |
+  |------------|------|------------|
+  | /dev/sda1  | 91%  | /          [ev-2] |
+  | /dev/sdb1  | 42%  | /data      [ev-2] |
+
+  Put the \`[ev-N]\` citation inside the last cell of each data row (or on the
+  one line that introduces the table). One isolated number in a sentence stays
+  inline — the table is for two or more comparable measurements.
 - Cite every substantive fact inline as \`[ev-N]\` (or \`[ev-1, ev-4]\`). Citations
   are the SAFETY mechanism — they prove you're not making things up. Cite
   frequently. When in doubt, cite.
