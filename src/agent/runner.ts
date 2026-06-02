@@ -78,11 +78,11 @@ export interface AgentRunner {
 export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
   const maxRetries = deps.maxSynthesizeRetries ?? 1;
   const historyLimit = deps.historyTurnLimit ?? 6;
-  // Default to ONE auto-follow-up round. The proposer surfaces concrete next
-  // actions after each answer; in HUMAN mode the user approves with `y`/`n`,
-  // in YOLO mode read-tier follow-ups run automatically. Set to 0 to disable
-  // proactive proposals entirely (1 prompt = 1 answer, user must ask again).
-  const maxFollowupIterations = deps.maxFollowupIterations ?? 1;
+  // Default: NO auto-follow-up round (1 prompt = 1 answer). An extra round
+  // re-runs gather + re-synthesises, which in practice mostly REPEATS the answer
+  // the user already read — noise, not value. Set max_followup_iterations > 0 in
+  // ~/.piper/credentials.json to opt back into proactive deeper investigation.
+  const maxFollowupIterations = deps.maxFollowupIterations ?? 0;
 
   async function* run(req: RunRequest): AsyncIterable<AgentEvent> {
     // LLM trace queue — populated by the onTrace callbacks we pass to each
