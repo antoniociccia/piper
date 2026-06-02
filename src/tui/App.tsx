@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { Box, Static, Text, useApp, useInput } from 'ink';
+import { Box, Static, Text, useApp, useInput, useStdin } from 'ink';
 
 import type { PGlite } from '@electric-sql/pglite';
 
@@ -24,6 +24,8 @@ import {
 } from '../environments/types.ts';
 import type { Executor } from '../exec/executor.ts';
 import type {
+  ElevationApprovalCallback,
+  ElevationProposal,
   MutationApprovalCallback,
   MutationDecision,
   MutationProposal,
@@ -65,6 +67,7 @@ import { parseSlashCommand, slashCompletions, type SlashCommand } from './comman
 import { MemoryViewer } from './MemoryViewer.tsx';
 import { ModelPicker, type ModelSelection } from './ModelPicker.tsx';
 import { WatchPanel, type WatchAnomalyView } from './WatchPanel.tsx';
+import { ElevationApprovalPanel } from './ElevationApprovalPanel.tsx';
 import { MutationApprovalPanel } from './MutationApprovalPanel.tsx';
 import { Proposals } from './Proposals.tsx';
 import { Report } from './Report.tsx';
@@ -103,6 +106,23 @@ export interface AppDeps {
    * this callback so the prompt renders in the TUI.
    */
   readonly registerMutationApprover?: (cb: MutationApprovalCallback) => void;
+  /**
+   * Like {@link registerMutationApprover} but for privilege elevation (sudo).
+   * The executor calls this for any action (read/mutate/destructive) that wants
+   * sudo. The callback renders the elevation panel and resolves on a/r/n.
+   */
+  readonly registerElevationApprover?: (cb: ElevationApprovalCallback) => void;
+  /**
+   * Registered with a yes/no callback the executor invokes when `sudo -n`
+   * needs a password. `true` runs the INTERACTIVE ssh -tt passthrough (the
+   * user types the password on their terminal; PIPER never sees it).
+   */
+  readonly registerSudoPasswordApprover?: (
+    cb: (info: {
+      readonly actionName: string;
+      readonly commandScrubbed: string;
+    }) => Promise<boolean>,
+  ) => void;
   /** Webhook URLs sourced from ~/.piper/credentials.json watch_webhooks. */
   readonly watchWebhookUrls?: readonly string[];
 }
@@ -116,6 +136,17 @@ interface PendingApproval {
 interface PendingMutation {
   readonly proposal: MutationProposal;
   readonly resolve: (decision: MutationDecision) => void;
+}
+
+interface PendingElevation {
+  readonly proposal: ElevationProposal;
+  readonly resolve: (decision: MutationDecision) => void;
+}
+
+interface PendingSudoPassword {
+  readonly actionName: string;
+  readonly commandScrubbed: string;
+  readonly resolve: (allow: boolean) => void;
 }
 
 type ExecutionMode = 'human' | 'yolo';
@@ -163,6 +194,11 @@ interface State {
   streamingActive: boolean;
   pendingApproval?: PendingApproval;
   pendingMutation?: PendingMutation;
+  pendingElevation?: PendingElevation;
+  /** True once the user pressed approve on a double-confirm elevation; a second
+   *  `a` then resolves it. Reset to false on each new elevation proposal. */
+  elevationConfirmArmed: boolean;
+  pendingSudoPassword?: PendingSudoPassword;
   /** Active watch run UI state. null = not watching. */
   watch: WatchUiState | null;
 }
@@ -199,6 +235,11 @@ type Action =
   | { type: 'clear-approval' }
   | { type: 'pending-mutation'; mutation: PendingMutation }
   | { type: 'clear-mutation' }
+  | { type: 'pending-elevation'; elevation: PendingElevation }
+  | { type: 'arm-elevation-confirm' }
+  | { type: 'clear-elevation' }
+  | { type: 'pending-sudo-password'; request: PendingSudoPassword }
+  | { type: 'clear-sudo-password' }
   | { type: 'watch-start'; plan: WatchPlan }
   | { type: 'watch-event'; event: WatchEvent }
   | { type: 'watch-stop' };
@@ -320,6 +361,22 @@ function reducer(state: State, action: Action): State {
       delete next.pendingMutation;
       return next;
     }
+    case 'pending-elevation':
+      return { ...state, pendingElevation: action.elevation, elevationConfirmArmed: false, input: '' };
+    case 'arm-elevation-confirm':
+      return { ...state, elevationConfirmArmed: true };
+    case 'clear-elevation': {
+      const next = { ...state, input: '', elevationConfirmArmed: false };
+      delete next.pendingElevation;
+      return next;
+    }
+    case 'pending-sudo-password':
+      return { ...state, pendingSudoPassword: action.request, input: '' };
+    case 'clear-sudo-password': {
+      const next = { ...state, input: '' };
+      delete next.pendingSudoPassword;
+      return next;
+    }
     case 'watch-start':
       return {
         ...state,
@@ -409,16 +466,21 @@ const INITIAL_STATE: State = {
   streamingPartial: '',
   streamingLines: [],
   streamingActive: false,
+  elevationConfirmArmed: false,
   watch: null,
 };
 
 export function App(deps: AppDeps): JSX.Element {
   const { exit } = useApp();
+  const { setRawMode, isRawModeSupported } = useStdin();
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const [currentClient, setCurrentClient] = useState<ModelClient>(deps.client);
   const [currentSessionId, setCurrentSessionId] = useState<SessionId>(deps.sessionId);
   const runnerRef = useRef<AgentRunner | null>(null);
   const watchAbortRef = useRef<AbortController | null>(null);
+  // Set to true when the user approves a sudo-password TTY passthrough so that
+  // raw mode can be restored once the agent turn finishes (see useEffect below).
+  const sudoPassthroughUsedRef = useRef<boolean>(false);
 
   const approveProposals = useCallback(
     (proposals: readonly ProposedStep[], iteration: number): Promise<ProposalDecision> => {
@@ -577,6 +639,59 @@ export function App(deps: AppDeps): JSX.Element {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Elevation (sudo) approval bridge — mirrors the mutation approver above.
+  useEffect(() => {
+    if (deps.registerElevationApprover === undefined) return;
+    deps.registerElevationApprover((proposal) => {
+      return new Promise<MutationDecision>((resolve) => {
+        dispatch({ type: 'pending-elevation', elevation: { proposal, resolve } });
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sudo-password yes/no bridge. On `true` the executor will spawn an
+  // interactive `ssh -tt` child that owns the TTY; we drop Ink's raw mode first
+  // so the child's stdin reaches the terminal cleanly. Known limitation: Ink
+  // and the child share the TTY for the duration of the interactive prompt.
+  useEffect(() => {
+    if (deps.registerSudoPasswordApprover === undefined) return;
+    deps.registerSudoPasswordApprover((info) => {
+      return new Promise<boolean>((resolve) => {
+        dispatch({
+          type: 'pending-sudo-password',
+          request: {
+            actionName: info.actionName,
+            commandScrubbed: info.commandScrubbed,
+            resolve: (allow) => {
+              if (allow && isRawModeSupported) {
+                setRawMode(false);
+                // Mark that a TTY passthrough was used so raw mode can be
+                // restored once the agent turn finishes (see useEffect below).
+                sudoPassthroughUsedRef.current = true;
+              }
+              resolve(allow);
+            },
+          },
+        });
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Restore Ink raw mode after a sudo-password TTY passthrough. The interactive
+  // ssh -tt child runs inside the executor (not directly observable here), but
+  // `state.busy` goes false when the whole agent turn finishes. At that point,
+  // if a passthrough was approved during this turn, re-enable raw mode so the
+  // TUI input works normally for subsequent turns.
+  useEffect(() => {
+    if (!state.busy && sudoPassthroughUsedRef.current) {
+      sudoPassthroughUsedRef.current = false;
+      if (isRawModeSupported) setRawMode(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.busy]);
 
   const handleResume = useCallback(
     async (newSessionId: SessionId): Promise<void> => {
@@ -1172,6 +1287,24 @@ export function App(deps: AppDeps): JSX.Element {
     [state.pendingMutation],
   );
 
+  const resolveElevation = useCallback(
+    (decision: MutationDecision) => {
+      if (state.pendingElevation === undefined) return;
+      state.pendingElevation.resolve(decision);
+      dispatch({ type: 'clear-elevation' });
+    },
+    [state.pendingElevation],
+  );
+
+  const resolveSudoPassword = useCallback(
+    (allow: boolean) => {
+      if (state.pendingSudoPassword === undefined) return;
+      state.pendingSudoPassword.resolve(allow);
+      dispatch({ type: 'clear-sudo-password' });
+    },
+    [state.pendingSudoPassword],
+  );
+
   useInput((input, key) => {
     if (state.showHelp) {
       dispatch({ type: 'set-help', show: false });
@@ -1215,6 +1348,72 @@ export function App(deps: AppDeps): JSX.Element {
     // delivers each key to ALL active subscribers, so we have to opt out
     // explicitly here.)
     if (state.showModelPicker || state.showSessionPicker || state.showMemoryViewer) {
+      return;
+    }
+    // Sudo-password passthrough confirm: a simple yes/no. `y` runs the
+    // INTERACTIVE ssh -tt session (the user types the password on their
+    // terminal); anything else declines. Checked before all other gates.
+    if (state.pendingSudoPassword !== undefined) {
+      if (key.ctrl && input === 'c') {
+        resolveSudoPassword(false);
+        return;
+      }
+      if (key.escape) {
+        resolveSudoPassword(false);
+        return;
+      }
+      const ch = input.toLowerCase();
+      if (ch === 'y') {
+        resolveSudoPassword(true);
+        return;
+      }
+      if (ch === 'n') {
+        resolveSudoPassword(false);
+        return;
+      }
+      // Everything else ignored — no buffer mutation.
+      return;
+    }
+    // Elevation (sudo) approval mode. Ordered BEFORE the mutation gate so a
+    // mutate+sudo proposal resolves the elevation first. For double-confirm
+    // proposals the first `a` only arms; a second `a` resolves approve-once.
+    if (state.pendingElevation !== undefined) {
+      const proposal = state.pendingElevation.proposal;
+      if (key.ctrl && input === 'c') {
+        resolveElevation({ kind: 'reject', reason: 'user rejected sudo' });
+        return;
+      }
+      if (key.escape) {
+        resolveElevation({ kind: 'reject', reason: 'user rejected sudo' });
+        return;
+      }
+      const ch = input.toLowerCase();
+      if (ch === 'a' || ch === 'y') {
+        if (proposal.doubleConfirm && !state.elevationConfirmArmed) {
+          dispatch({ type: 'arm-elevation-confirm' });
+          return;
+        }
+        resolveElevation({ kind: 'approve-once' });
+        return;
+      }
+      if (ch === 'r' && proposal.tier !== 'destructive') {
+        // 'r' = approve & remember (session). Destructive sudo is NEVER
+        // rememberable — the option is hidden in the panel and rejected here.
+        // approve-remember is MORE consequential than approve-once (it persists
+        // for the session), so it MUST also honour doubleConfirm — mirror the
+        // same arming logic used for 'a'.
+        if (proposal.doubleConfirm && !state.elevationConfirmArmed) {
+          dispatch({ type: 'arm-elevation-confirm' });
+          return;
+        }
+        resolveElevation({ kind: 'approve-remember' });
+        return;
+      }
+      if (ch === 'n') {
+        resolveElevation({ kind: 'reject', reason: 'user rejected sudo' });
+        return;
+      }
+      // Everything else ignored — no buffer mutation, no fallthrough.
       return;
     }
     // Mutation approval mode: a single mutation proposal is on screen and
@@ -1519,18 +1718,55 @@ export function App(deps: AppDeps): JSX.Element {
         />
       )}
 
-      {state.pendingMutation !== undefined && (
+      {/* Elevation comes first: a mutate+sudo proposal resolves the sudo gate
+          before the mutation gate. */}
+      {state.pendingElevation !== undefined && (
+        <ElevationApprovalPanel
+          proposal={state.pendingElevation.proposal}
+          doubleConfirmArmed={state.elevationConfirmArmed}
+        />
+      )}
+
+      {state.pendingElevation === undefined && state.pendingMutation !== undefined && (
         <MutationApprovalPanel proposal={state.pendingMutation.proposal} />
+      )}
+
+      {state.pendingSudoPassword !== undefined && (
+        <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
+          <Text bold color="yellow">
+            sudo needs a password for {state.pendingSudoPassword.actionName}
+          </Text>
+          <Box marginTop={1} marginLeft={2}>
+            <Text color="white">{state.pendingSudoPassword.commandScrubbed}</Text>
+          </Box>
+          <Box marginTop={1}>
+            <Text bold>
+              <Text color="green">[y]</Text>
+              <Text> type your password in the terminal   </Text>
+              <Text color="red">[n]</Text>
+              <Text> cancel</Text>
+            </Text>
+          </Box>
+          <Box marginTop={1}>
+            <Text dimColor>
+              PIPER never sees the password — the interactive ssh session owns the terminal.
+            </Text>
+          </Box>
+        </Box>
       )}
 
       {state.entries.length === 0 &&
         !state.streamingActive &&
         !state.busy &&
         state.pendingApproval === undefined &&
+        state.pendingElevation === undefined &&
+        state.pendingSudoPassword === undefined &&
         state.pendingMutation === undefined && <Banner />}
 
       {state.pendingApproval === undefined &&
         state.pendingMutation === undefined &&
+        state.pendingElevation === undefined &&
+        state.pendingSudoPassword === undefined &&
         state.watch === null &&
         !state.showModelPicker &&
         !state.showSessionPicker &&

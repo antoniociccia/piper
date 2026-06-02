@@ -64,6 +64,18 @@ describe('config/credentials — fields', () => {
     expect(result?.openrouterApiKey).toBeUndefined();
     expect(result?.defaultModel).toBeUndefined();
   });
+
+  test('reads sudo_double_confirm_mutate=false', async () => {
+    writeFileSync(credentialsPath, JSON.stringify({ sudo_double_confirm_mutate: false }));
+    const result = await readPiperCredentials(credentialsPath);
+    expect(result?.sudoDoubleConfirmMutate).toBe(false);
+  });
+
+  test('sudoDoubleConfirmMutate defaults to true when absent', async () => {
+    writeFileSync(credentialsPath, '{}');
+    const result = await readPiperCredentials(credentialsPath);
+    expect(result?.sudoDoubleConfirmMutate).toBe(true);
+  });
 });
 
 describe('config/credentials — environments', () => {

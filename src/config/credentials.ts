@@ -27,6 +27,7 @@ interface RawCredentials {
   readonly compaction_keep_recent?: unknown;
   readonly compaction_trigger_pct?: unknown;
   readonly max_followup_iterations?: unknown;
+  readonly sudo_double_confirm_mutate?: unknown;
   readonly watch_webhooks?: unknown;
   readonly environments?: Record<string, RawEnvironment>;
 }
@@ -51,6 +52,8 @@ export interface PiperCredentials {
   readonly compactionKeepRecent?: number;
   readonly compactionTriggerPct?: number;
   readonly maxFollowupIterations?: number;
+  /** Mutate+sudo proposals require a second confirmation. Defaults to true. */
+  readonly sudoDoubleConfirmMutate: boolean;
   readonly watchWebhooks: readonly WatchWebhook[];
   readonly environments: readonly EnvironmentInput[];
 }
@@ -153,6 +156,7 @@ export async function readPiperCredentials(
     ...(asNumber(raw.max_followup_iterations) === undefined
       ? {}
       : { maxFollowupIterations: Math.max(0, Math.floor(raw.max_followup_iterations as number)) }),
+    sudoDoubleConfirmMutate: raw.sudo_double_confirm_mutate === false ? false : true,
     watchWebhooks: parseWatchWebhooks(raw.watch_webhooks),
     environments,
   };

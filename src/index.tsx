@@ -6,7 +6,7 @@ import { readPiperCredentials, defaultCredentialsPath } from './config/credentia
 import { ENV_VARS, readEnv } from './config/env-vars.ts';
 import { createEnvironmentRegistry } from './environments/registry.ts';
 import { createExecutor } from './exec/executor.ts';
-import type { MutationApprovalCallback } from './exec/types.ts';
+import type { ElevationApprovalCallback, MutationApprovalCallback } from './exec/types.ts';
 import { createLogger } from './logging/logger.ts';
 import { createChatHistory } from './memory/chat-history.ts';
 import { closeDb, openDb } from './memory/db.ts';
@@ -493,6 +493,10 @@ async function main(): Promise<void> {
   // App registers (or after it unmounts), the holder stays null and any
   // mutate/destructive attempt is rejected with a clear message.
   let mutationApprovalCb: MutationApprovalCallback | null = null;
+  let elevationApprovalCb: ElevationApprovalCallback | null = null;
+  let sudoPasswordCb:
+    | ((info: { actionName: string; commandScrubbed: string }) => Promise<boolean>)
+    | null = null;
 
   const executor = createExecutor({
     db,
@@ -506,6 +510,15 @@ async function main(): Promise<void> {
       }
       return mutationApprovalCb(proposal);
     },
+    onElevationProposal: async (proposal) =>
+      elevationApprovalCb === null
+        ? { kind: 'reject', reason: 'TUI not ready to approve sudo' }
+        : elevationApprovalCb(proposal),
+    onSudoPasswordRequired: async (info) =>
+      sudoPasswordCb === null
+        ? false
+        : sudoPasswordCb({ actionName: info.actionName, commandScrubbed: info.commandScrubbed }),
+    sudoDoubleConfirmMutate: effectiveCreds?.sudoDoubleConfirmMutate ?? true,
   });
   const costTracker = createCostTracker({
     db,
@@ -591,6 +604,12 @@ async function main(): Promise<void> {
       onSwitchModel={onSwitchModel}
       registerMutationApprover={(cb) => {
         mutationApprovalCb = cb;
+      }}
+      registerElevationApprover={(cb) => {
+        elevationApprovalCb = cb;
+      }}
+      registerSudoPasswordApprover={(cb) => {
+        sudoPasswordCb = cb;
       }}
       {...(cfg.apiKey === undefined ? {} : { openrouterApiKey: cfg.apiKey })}
       {...(resumedTitle === null ? {} : { initialTitle: resumedTitle })}
