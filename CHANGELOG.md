@@ -6,6 +6,20 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.4.1] — 2026-06-02
+
+### Fixed — Sudo elevation
+
+- Docker actions (`docker.ps`, `docker.logs`, `docker.inspect`,
+  `docker.compose_ps`, `docker.compose_up`) now honor `ctx.elevation`, so a
+  reactive sudo proposal on a "permission denied … Docker daemon socket"
+  failure actually re-runs the command with `sudo` instead of erroring
+  "approved sudo but resolved command lacks sudo".
+- The Executor no longer proposes sudo for an action whose `buildCommand`
+  ignores elevation: the reactive path skips the prompt (returning the original
+  failure) and the proactive path refuses with a clear message, so an
+  un-elevatable action never shows the confusing re-validation error.
+
 ## [0.4.0] — 2026-06-02
 
 ### Added — TUI / answer presentation

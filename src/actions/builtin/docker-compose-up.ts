@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { buildSshArgvForEnv } from '../../exec/ssh.ts';
+import { elevateRemoteCommand } from '../../security/elevation.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
@@ -72,7 +73,7 @@ export const dockerComposeUp: Action<Args, DockerComposeUpResult> = {
     // out which tags to restore on failure.
     const env = requireEnv(ctx);
     const argv = [...composeBase(args), 'ps', '--format', 'json', '--all'];
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
 
   buildDryRunCommand: (args, ctx) => {
@@ -87,14 +88,14 @@ export const dockerComposeUp: Action<Args, DockerComposeUpResult> = {
     const env = requireEnv(ctx);
     const argv = [...composeBase(args), 'config'];
     if (args.service !== undefined) argv.push(args.service);
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
 
   buildCommand: (args, ctx) => {
     const env = requireEnv(ctx);
     const argv = [...composeBase(args), 'up', '-d', '--remove-orphans'];
     if (args.service !== undefined) argv.push(args.service);
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
 
   parseResult: (raw) => ({ raw: raw.stdout.trim() }),
@@ -107,7 +108,7 @@ export const dockerComposeUp: Action<Args, DockerComposeUpResult> = {
     const env = requireEnv(ctx);
     const argv = [...composeBase(args), 'ps', '--format', 'json'];
     if (args.service !== undefined) argv.push(args.service);
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
 
   buildRollbackCommand: (args, ctx, _preState) => {
@@ -122,6 +123,6 @@ export const dockerComposeUp: Action<Args, DockerComposeUpResult> = {
     const env = requireEnv(ctx);
     const argv = [...composeBase(args), 'down'];
     if (args.service !== undefined) argv.push(args.service);
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
 };

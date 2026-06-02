@@ -221,12 +221,17 @@ describe('GATE: reactive sudo proposal', () => {
     const dbx = await openDb();
     const cat = createCatalog();
     // A read action with NO defaultElevation whose command fails permission-denied.
+    // Elevation-aware so the reactive guard lets the proposal through (a non-aware
+    // action is intentionally skipped — see the dedicated guard test below).
+    const { elevateRemoteCommand } = await import('../../src/security/elevation.ts');
     cat.register({
       name: 'fake.denies',
       tier: 'read',
       description: 'always permission denied',
       argsSchema: z.object({ environment: z.string().optional() }),
-      buildCommand: () => ['sh', '-c', 'echo "permission denied" 1>&2; exit 1'],
+      buildCommand: (_a, ctx) => [
+        ...elevateRemoteCommand(['sh', '-c', 'echo "permission denied" 1>&2; exit 1'], ctx.elevation ?? 'none'),
+      ],
       parseResult: (raw) => raw.stdout,
     });
     const reg = createEnvironmentRegistry(dbx);
@@ -462,6 +467,82 @@ describe('GATE: sudo re-validation, never-remember, and double-gating', () => {
     await executor.exec('fake.destroy_elevated', { environment: 'staging' }, { sessionId: sid });
     await executor.exec('fake.destroy_elevated', { environment: 'staging' }, { sessionId: sid });
     expect(elevationPrompts).toBe(2); // destructive sudo never remembered → prompts each time
+    await closeDb(dbx);
+  });
+
+  test('reactive sudo on an elevation-aware action re-runs WITH sudo (no execution-failed)', async () => {
+    const { z } = await import('zod');
+    const { createCatalog } = await import('../../src/actions/catalog.ts');
+    const { createEnvironmentRegistry } = await import('../../src/environments/registry.ts');
+    const { createExecutor } = await import('../../src/exec/executor.ts');
+    const { elevateRemoteCommand } = await import('../../src/security/elevation.ts');
+    const dbx = await openDb();
+    const cat = createCatalog();
+    let pass = 0;
+    cat.register({
+      name: 'fake.docker_like',
+      tier: 'read',
+      description: 'permission denied unprivileged; elevation-aware',
+      argsSchema: z.object({ environment: z.string().optional() }),
+      buildCommand: (_a, ctx) => {
+        // First (unelevated) call prints the docker permission-denied + exits 1.
+        // The elevated re-run carries sudo and "succeeds".
+        pass += 1;
+        if ((ctx.elevation ?? 'none') === 'sudo') {
+          return [...elevateRemoteCommand(['sh', '-c', 'echo ok'], 'sudo')];
+        }
+        return ['sh', '-c', 'echo "Got permission denied while trying to connect to the Docker daemon socket" 1>&2; exit 1'];
+      },
+      parseResult: (raw) => raw.stdout,
+    });
+    const reg = createEnvironmentRegistry(dbx);
+    await reg.upsert({ name: 'staging', host: 'h', sshUser: 'u' });
+    const sid = `t-${crypto.randomUUID()}`;
+    await dbx.query(`INSERT INTO sessions (id, config_snapshot_json) VALUES ($1, $2::jsonb)`, [sid, '{}']);
+    let reactive = false;
+    const { ExecError } = await import('../../src/exec/types.ts');
+    const executor = createExecutor({
+      db: dbx, catalog: cat, registry: reg,
+      onElevationProposal: async (p) => { if (p.origin === 'reactive') reactive = true; return { kind: 'approve-once' }; },
+    });
+    let caught: unknown;
+    try { await executor.exec('fake.docker_like', { environment: 'staging' }, { sessionId: sid }); }
+    catch (e) { caught = e; }
+    expect(reactive).toBe(true);
+    expect(pass).toBeGreaterThanOrEqual(2); // unelevated attempt + elevated re-run
+    // The re-run carried sudo → re-validation passed → no execution-failed.
+    if (caught instanceof ExecError) expect(caught.reason).not.toBe('execution-failed');
+    await closeDb(dbx);
+  });
+
+  test('reactive sudo is NOT proposed for an action that ignores ctx.elevation (guard)', async () => {
+    const { z } = await import('zod');
+    const { createCatalog } = await import('../../src/actions/catalog.ts');
+    const { createEnvironmentRegistry } = await import('../../src/environments/registry.ts');
+    const { createExecutor } = await import('../../src/exec/executor.ts');
+    const dbx = await openDb();
+    const cat = createCatalog();
+    cat.register({
+      name: 'fake.not_elevatable',
+      tier: 'read',
+      description: 'permission denied but ignores ctx.elevation',
+      argsSchema: z.object({ environment: z.string().optional() }),
+      buildCommand: () => ['sh', '-c', 'echo "permission denied" 1>&2; exit 1'], // never sudo
+      parseResult: (raw) => raw.stdout,
+    });
+    const reg = createEnvironmentRegistry(dbx);
+    await reg.upsert({ name: 'staging', host: 'h', sshUser: 'u' });
+    const sid = `t-${crypto.randomUUID()}`;
+    await dbx.query(`INSERT INTO sessions (id, config_snapshot_json) VALUES ($1, $2::jsonb)`, [sid, '{}']);
+    let proposed = false;
+    const executor = createExecutor({
+      db: dbx, catalog: cat, registry: reg,
+      onElevationProposal: async () => { proposed = true; return { kind: 'approve-once' }; },
+    });
+    const result = await executor.exec('fake.not_elevatable', { environment: 'staging' }, { sessionId: sid });
+    // The action can't be elevated → no sudo proposal → the original failure is returned.
+    expect(proposed).toBe(false);
+    expect(result.exitCode).toBe(1);
     await closeDb(dbx);
   });
 

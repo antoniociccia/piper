@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { buildSshArgvForEnv } from '../../exec/ssh.ts';
+import { elevateRemoteCommand } from '../../security/elevation.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
@@ -27,7 +28,10 @@ export const dockerInspect: Action<Args, DockerInspectResult | null> = {
   description:
     'Return `docker inspect` JSON for a single container on the remote environment, summarised to state, mounts, and networks.',
   argsSchema,
-  buildCommand: (args, ctx) => buildSshArgvForEnv(requireEnv(ctx), ['docker', 'inspect', args.container]),
+  buildCommand: (args, ctx) =>
+    buildSshArgvForEnv(requireEnv(ctx), [
+      ...elevateRemoteCommand(['docker', 'inspect', args.container], ctx.elevation ?? 'none'),
+    ]),
   parseResult: (raw) => {
     try {
       const parsed = JSON.parse(raw.stdout) as unknown;

@@ -303,6 +303,20 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           elevation: 'sudo',
         };
         const previewArgv = typedAction.buildCommand(args, previewCtx);
+        // Proactive misconfig: the action declares sudo elevation but its
+        // buildCommand doesn't honor ctx.elevation, so the resolved command
+        // carries no sudo and would trip the argvCarriesSudo backstop after the
+        // user approved. Refuse with a clear message instead of prompting for a
+        // sudo that can't apply.
+        if (!argvCarriesSudo(previewArgv)) {
+          return refuse(
+            typedAction.name,
+            args,
+            'execution-failed',
+            ctx,
+            'action declares sudo elevation but buildCommand does not honor ctx.elevation',
+          );
+        }
         const decision = await deps.onElevationProposal({
           actionName: typedAction.name,
           tier: typedAction.tier,
@@ -509,6 +523,21 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     ) {
       const previewCtx: ActionExecContext = { ...actionCtx, elevation: 'sudo' };
       const previewArgv = action.buildCommand(args, previewCtx);
+      // Guard: only propose sudo if the action actually honors ctx.elevation.
+      // A buildCommand that ignores elevation would produce the same non-sudo
+      // command, then trip the argvCarriesSudo backstop on the re-run and fail
+      // with "approved sudo but resolved command lacks sudo" — bad UX. Skip the
+      // proposal and return the original failed result instead.
+      if (!argvCarriesSudo(previewArgv)) {
+        return {
+          auditId,
+          evidenceId,
+          stdout: stdoutScrubbed,
+          stderr: stderrScrubbed,
+          exitCode,
+          durationMs,
+        };
+      }
       const decision = await deps.onElevationProposal({
         actionName: action.name,
         tier: action.tier,

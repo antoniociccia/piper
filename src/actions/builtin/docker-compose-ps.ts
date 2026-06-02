@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { buildSshArgvForEnv } from '../../exec/ssh.ts';
+import { elevateRemoteCommand } from '../../security/elevation.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
@@ -32,7 +33,7 @@ export const dockerComposePs: Action<Args, DockerComposePsResult> = {
     const env = requireEnv(ctx);
     const argv: string[] = ['docker', 'compose', '-f', `${args.project_dir}/docker-compose.yml`, 'ps'];
     if (args.all === true) argv.push('--all');
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
   parseResult: (raw) => {
     const text = raw.stdout.trim();

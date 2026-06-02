@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { buildSshArgvForEnv } from '../../exec/ssh.ts';
+import { elevateRemoteCommand } from '../../security/elevation.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
@@ -31,7 +32,7 @@ export const dockerLogs: Action<Args, DockerLogsResult> = {
       argv.push('--since', args.since);
     }
     argv.push(args.container);
-    return buildSshArgvForEnv(env, argv);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(argv, ctx.elevation ?? 'none')]);
   },
   parseResult: (raw) => {
     const merged = `${raw.stdout}\n${raw.stderr}`;

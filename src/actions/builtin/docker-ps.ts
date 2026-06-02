@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { buildSshArgvForEnv } from '../../exec/ssh.ts';
+import { elevateRemoteCommand } from '../../security/elevation.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
@@ -29,7 +30,7 @@ export const dockerPs: Action<Args, readonly DockerContainer[]> = {
     const env = requireEnv(ctx);
     const cmd = ['docker', 'ps', '--format', 'json'];
     if (args.all === true) cmd.splice(2, 0, '-a');
-    return buildSshArgvForEnv(env, cmd);
+    return buildSshArgvForEnv(env, [...elevateRemoteCommand(cmd, ctx.elevation ?? 'none')]);
   },
   parseResult: (raw) => {
     const out: DockerContainer[] = [];
