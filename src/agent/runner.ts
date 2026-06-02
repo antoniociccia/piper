@@ -295,6 +295,20 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
     result.failures = [...gathered.failures];
 
     if (result.evidence.length === 0) {
+      // No read evidence to synthesize from. If steps actually FAILED (e.g. a
+      // mutation whose verify failed and rolled back), don't abort with a
+      // cryptic message — render a grounded failure report so the user sees
+      // what was attempted and why it failed. Deterministic, no LLM call.
+      if (result.failures.length > 0) {
+        const report = formatFailureReport(result.failures);
+        result.reportMarkdown = report;
+        yield { type: 'synthesize-started' };
+        yield { type: 'synthesize-chunk', delta: report };
+        yield { type: 'synthesize-ready', reportMarkdown: report, costUsdDelta: 0 };
+        yield { type: 'verify-passed' };
+        yield { type: 'done', result: toResult(result) };
+        return;
+      }
       result.aborted = true;
       result.abortReason = 'gather-empty: all plan steps failed; no evidence to synthesize';
       yield { type: 'aborted', reason: result.abortReason };
@@ -581,6 +595,31 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
 
 function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * A grounded, deterministic report for when every plan step failed (no read
+ * evidence to synthesize). Lists each failure and, for the common
+ * privilege/daemon case, adds a concrete next step. No LLM call.
+ */
+export function formatFailureReport(failures: readonly StepFailure[]): string {
+  const lines: string[] = ['The plan could not complete — every step failed.', ''];
+  for (const f of failures) {
+    lines.push(`- **${f.actionName}** — ${f.reason}`);
+  }
+  const haystack = failures.map((f) => f.reason).join(' ').toLowerCase();
+  if (
+    haystack.includes('permission denied') ||
+    haystack.includes('daemon socket') ||
+    haystack.includes('must be root') ||
+    haystack.includes('verify exited')
+  ) {
+    lines.push('');
+    lines.push(
+      'This looks like a privilege or daemon-access problem — often the host needs `sudo` for docker. Re-run the request and approve the sudo prompt when it appears.',
+    );
+  }
+  return lines.join('\n');
 }
 
 function formatError(prefix: string, err: unknown): string {

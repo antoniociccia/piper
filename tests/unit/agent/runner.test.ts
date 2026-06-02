@@ -187,7 +187,7 @@ describe('agent/runner — failure paths', () => {
     expect(done.result.verification?.ok).toBe(false);
   });
 
-  test('all gather steps fail → aborted with gather-empty reason', async () => {
+  test('all gather steps fail → renders a grounded failure report (not a cryptic abort)', async () => {
     const { catalog, registry, executor, costTracker, sessionId } = await setup();
     const client = makeScriptedClient([
       {
@@ -198,11 +198,13 @@ describe('agent/runner — failure paths', () => {
     ]);
     const runner = createAgentRunner({ catalog, registry, executor, client, costTracker });
     const events = await collect(runner.run({ userRequest: 'do something', sessionId }));
-    const aborted = events.find((e) => e.type === 'aborted');
-    expect(aborted).toBeDefined();
-    if (aborted?.type === 'aborted') {
-      expect(aborted.reason).toContain('gather-empty');
-    }
+    // No more "gather-empty" abort — the user gets a report of what failed.
+    expect(events.find((e) => e.type === 'aborted')).toBeUndefined();
+    const done = events[events.length - 1];
+    if (done?.type !== 'done') throw new Error('expected done event last');
+    expect(done.result.reportMarkdown).toBeDefined();
+    expect(done.result.reportMarkdown).toContain('fake.run');
+    expect(done.result.failures.length).toBeGreaterThanOrEqual(1);
   });
 });
 
