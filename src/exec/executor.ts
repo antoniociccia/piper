@@ -9,12 +9,20 @@ import type { AuditKind } from '../memory/migrations.ts';
 import type { AuditLogId, EvidenceId } from '../memory/types.ts';
 import type { EmbeddingClient } from '../rag/embedding-client.ts';
 import { retrieveRelevant } from '../rag/retrieve.ts';
+import {
+  detectPermissionDenied,
+  detectSudoPasswordRequired,
+  type Elevation,
+} from '../security/elevation.ts';
 import { isPathDenied } from '../security/paths.ts';
 import { detectSecrets, scrubText } from '../security/scrub.ts';
+import { toInteractive } from './ssh.ts';
+import type { Environment } from '../environments/types.ts';
 
 import {
   argvToShell,
   ExecError,
+  type ElevationApprovalCallback,
   type ExecContext,
   type ExecResult,
   type MutationApprovalCallback,
@@ -25,6 +33,17 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ALLOWED_TIERS: readonly Tier[] = ['read', 'mutate', 'destructive'];
+
+/**
+ * Defense in depth: after a sudo elevation is approved, the resolved argv MUST
+ * actually carry sudo before we execute. Catches a buildCommand that — by bug
+ * or tampering — drops the elevation between approval and execution. Matches
+ * either a local `sudo` token or `sudo`/`sudo -n` embedded in a remote command
+ * string (actions self-wrap ssh, so sudo lives inside the quoted remote cmd).
+ */
+function argvCarriesSudo(argv: readonly string[]): boolean {
+  return argv.some((a) => a === 'sudo' || a.includes('sudo -n ') || a.includes('sudo '));
+}
 
 export interface ExecutorDeps {
   readonly db: PGlite;
@@ -52,6 +71,28 @@ export interface ExecutorDeps {
    * "approve-once" by the executor — destructive is never persisted.
    */
   readonly onMutationProposal?: MutationApprovalCallback;
+  /**
+   * Required for any action whose effective elevation is `sudo`. When unset,
+   * a sudo-wanting action is refused (`mutation-no-approval`) — sudo never runs
+   * unprompted. The callback shows the verbatim `sudo -n …` command and returns
+   * the decision. Destructive-tier "approve-remember" is never persisted.
+   */
+  readonly onElevationProposal?: ElevationApprovalCallback;
+  /**
+   * When false, mutate+sudo proposals carry `doubleConfirm: false` (single
+   * confirmation). Defaults to true (the safe default — ask twice).
+   */
+  readonly sudoDoubleConfirmMutate?: boolean;
+  /**
+   * Called when an elevated `sudo -n` run failed because it needs a password.
+   * Returns true if the user wants to retry via an INTERACTIVE ssh -tt session
+   * where they type the password on their own terminal (PIPER never sees it).
+   */
+  readonly onSudoPasswordRequired?: (info: {
+    readonly actionName: string;
+    readonly commandScrubbed: string;
+    readonly environment?: Environment;
+  }) => Promise<boolean>;
 }
 
 export interface Executor {
@@ -71,6 +112,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   const userPaths = deps.userPathPatterns ?? [];
   const log = deps.logger;
   const registry = deps.registry ?? createEnvironmentRegistry(deps.db);
+
+  // Session-only allowlist for remembered sudo elevations, keyed by
+  // `${environment} ${action}`. Never persisted to PGlite, never holds a
+  // destructive action (guarded at insertion). Cleared when the executor (and
+  // thus the session) goes away.
+  const rememberedSudo = new Set<string>();
+  const sudoKey = (envName: string, actionName: string): string => `${envName} ${actionName}`;
 
   // ────────────────────────────────────────────────────────────────────────
   // Audit helpers
@@ -148,6 +196,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     return { stdout, stderr, exitCode, timedOut };
   }
 
+  // Interactive run for the sudo-password fallback. stdio is INHERITED, so the
+  // sudo password prompt and the typed password stay on the user's terminal and
+  // never enter PIPER's buffers. We learn only the exit code.
+  async function runInteractive(argv: readonly string[]): Promise<number> {
+    const proc = Bun.spawn([...argv], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
+    return await proc.exited;
+  }
+
   // ────────────────────────────────────────────────────────────────────────
   // exec — the only entry point
   // ────────────────────────────────────────────────────────────────────────
@@ -194,11 +250,21 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ? (args as Record<string, unknown>)
         : {};
 
-    const pathArg = argsObj['path'];
-    if (typeof pathArg === 'string' && isPathDenied(pathArg, userPaths)) {
-      return refuse(actionName, args, 'path-denied', ctx, `path in denylist: ${pathArg}`, {
-        path: pathArg,
-      });
+    // Path denylist. Scan the canonical `path` arg AND any other string arg
+    // whose value is a filesystem path (starts with `/` or `~/`). The second
+    // clause matters once actions can run under sudo: a privileged action could
+    // otherwise read a denied file (`/etc/shadow`, `~/.ssh/id_rsa`) via a
+    // differently-named arg (`target`, `file`, `unit`). Free-text args (search
+    // queries, service names) don't start with `/` or `~/`, so they're never
+    // falsely denied.
+    for (const [key, value] of Object.entries(argsObj)) {
+      if (typeof value !== 'string') continue;
+      const looksLikePath = key === 'path' || value.startsWith('/') || value.startsWith('~/');
+      if (looksLikePath && isPathDenied(value, userPaths)) {
+        return refuse(actionName, args, 'path-denied', ctx, `path in denylist: ${value}`, {
+          path: value,
+        });
+      }
     }
 
     let resolvedEnvironment = ctx.environment;
@@ -218,19 +284,57 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       resolvedEnvironment = env;
     }
 
+    const typedAction = action as Action<unknown, unknown>;
+
+    // ── Elevation gate ───────────────────────────────────────────────────────
+    // Runs AFTER the path-denylist check above, so a sudo command with a denied
+    // path arg is refused (`path-denied`) without ever prompting for sudo.
+    const wantsSudo = typedAction.defaultElevation === 'sudo' || ctx.elevation === 'sudo';
+    let elevation: Elevation = 'none';
+    if (wantsSudo) {
+      const envName = resolvedEnvironment?.name ?? '';
+      if (!rememberedSudo.has(sudoKey(envName, typedAction.name))) {
+        if (deps.onElevationProposal === undefined) {
+          return refuse(typedAction.name, args, 'mutation-no-approval', ctx, 'sudo requires an approver');
+        }
+        const previewCtx: ActionExecContext = {
+          sessionId: ctx.sessionId,
+          ...(resolvedEnvironment === undefined ? {} : { environment: resolvedEnvironment }),
+          elevation: 'sudo',
+        };
+        const previewArgv = typedAction.buildCommand(args, previewCtx);
+        const decision = await deps.onElevationProposal({
+          actionName: typedAction.name,
+          tier: typedAction.tier,
+          args,
+          commandScrubbed: scrubText(argvToShell(previewArgv), userScrub),
+          ...(resolvedEnvironment === undefined ? {} : { environment: resolvedEnvironment }),
+          origin: ctx.elevation === 'sudo' ? 'reactive' : 'proactive',
+          doubleConfirm: typedAction.tier === 'mutate' && (deps.sudoDoubleConfirmMutate ?? true),
+        });
+        if (decision.kind === 'reject') {
+          return refuse(typedAction.name, args, 'elevation-rejected', ctx, decision.reason ?? 'sudo rejected');
+        }
+        // Destructive sudo is NEVER remembered — it prompts every time, by design.
+        if (decision.kind === 'approve-remember' && typedAction.tier !== 'destructive') {
+          rememberedSudo.add(sudoKey(envName, typedAction.name));
+        }
+      }
+      elevation = 'sudo';
+    }
+
     const actionCtx: ActionExecContext = {
       sessionId: ctx.sessionId,
       ...(resolvedEnvironment === undefined ? {} : { environment: resolvedEnvironment }),
+      ...(elevation === 'none' ? {} : { elevation }),
     };
-
-    const typedAction = action as Action<unknown, unknown>;
 
     // Mutate / destructive: route through the human-in-the-loop flow.
     if (typedAction.tier !== 'read') {
-      return execMutation(typedAction, args, argsJson, actionCtx, ctx, resolvedEnvironment);
+      return execMutation(typedAction, args, argsJson, actionCtx, ctx, resolvedEnvironment, elevation);
     }
 
-    return execRead(typedAction, args, argsJson, actionCtx, ctx);
+    return execRead(typedAction, args, argsJson, actionCtx, ctx, elevation);
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -243,10 +347,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     argsJson: string,
     actionCtx: ActionExecContext,
     ctx: ExecContext,
+    elevation: Elevation,
   ): Promise<ExecResult> {
     const argv = action.buildCommand(args, actionCtx);
     if (argv.length === 0) {
       return refuse(action.name, args, 'execution-failed', ctx, 'buildCommand returned empty argv');
+    }
+    if (elevation === 'sudo' && !argvCarriesSudo(argv)) {
+      return refuse(action.name, args, 'execution-failed', ctx, 'approved sudo but resolved command lacks sudo');
     }
     const commandScrubbed = scrubText(argvToShell(argv), userScrub);
     const argsScrubbedJson = scrubText(argsJson, userScrub);
@@ -343,6 +451,89 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       duration_ms: durationMs,
     });
 
+    // Sudo password fallback: an ELEVATED `sudo -n` run that failed solely
+    // because the host needs a password / TTY. We offer to retry in an
+    // INTERACTIVE ssh -tt session where the user types the password on their own
+    // terminal — it never enters PIPER's buffers, logs, evidence, or model. We
+    // learn only the exit code. This is distinct from the reactive permission
+    // block below (already-sudo needing a password, not a generic denial).
+    if (
+      elevation === 'sudo' &&
+      exitCode !== 0 &&
+      detectSudoPasswordRequired(stderrScrubbed) &&
+      deps.onSudoPasswordRequired !== undefined &&
+      actionCtx.environment !== undefined
+    ) {
+      const interactiveArgv = toInteractive(argv);
+      const interactiveCommandScrubbed = scrubText(argvToShell(interactiveArgv), userScrub);
+      const ok = await deps.onSudoPasswordRequired({
+        actionName: action.name,
+        commandScrubbed: interactiveCommandScrubbed,
+        environment: actionCtx.environment,
+      });
+      if (ok) {
+        const interactiveAuditId = await insertAudit(
+          'exec',
+          ctx.sessionId,
+          action.name,
+          scrubText(argsJson, userScrub),
+          { commandScrubbed: interactiveCommandScrubbed },
+        );
+        const code = await runInteractive(interactiveArgv);
+        // Output went to the user's terminal; we capture only the exit code.
+        await deps.db.query(`UPDATE audit_log SET exit_code = $1 WHERE id = $2`, [
+          code,
+          interactiveAuditId,
+        ]);
+        return {
+          auditId: interactiveAuditId,
+          // Reuse the failed `sudo -n` evidence row: the interactive run produces
+          // no captured stdout/stderr by design, so there is nothing new to store.
+          evidenceId,
+          stdout: '',
+          stderr: '',
+          exitCode: code,
+          durationMs: 0,
+        };
+      }
+    }
+
+    // Reactive sudo: a non-elevated permission failure → offer a sudo re-run.
+    // Recursion-safe: the re-run sets ctx.elevation='sudo', so the second pass
+    // has elevation!=='none' here and cannot re-trigger.
+    if (
+      elevation === 'none' &&
+      action.defaultElevation !== 'sudo' &&
+      deps.onElevationProposal !== undefined &&
+      detectPermissionDenied(stderrScrubbed, exitCode)
+    ) {
+      const previewCtx: ActionExecContext = { ...actionCtx, elevation: 'sudo' };
+      const previewArgv = action.buildCommand(args, previewCtx);
+      const decision = await deps.onElevationProposal({
+        actionName: action.name,
+        tier: action.tier,
+        args,
+        commandScrubbed: scrubText(argvToShell(previewArgv), userScrub),
+        ...(actionCtx.environment === undefined ? {} : { environment: actionCtx.environment }),
+        origin: 'reactive',
+        doubleConfirm: false,
+      });
+      if (decision.kind !== 'reject') {
+        const key = sudoKey(actionCtx.environment?.name ?? '', action.name);
+        const persist = decision.kind === 'approve-remember' && action.tier !== 'destructive';
+        // Grant for THIS re-run so the gate in the recursive exec() doesn't
+        // prompt a second time. approve-remember keeps the grant for the
+        // session; approve-once removes it after the single re-run.
+        const wasAlreadyRemembered = rememberedSudo.has(key);
+        rememberedSudo.add(key);
+        try {
+          return await exec(action.name, args, { ...ctx, elevation: 'sudo' });
+        } finally {
+          if (!persist && !wasAlreadyRemembered) rememberedSudo.delete(key);
+        }
+      }
+    }
+
     return {
       auditId,
       evidenceId,
@@ -364,6 +555,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     actionCtx: ActionExecContext,
     ctx: ExecContext,
     environment: ActionExecContext['environment'],
+    elevation: Elevation,
   ): Promise<ExecResult> {
     if (deps.onMutationProposal === undefined) {
       return refuse(
@@ -412,6 +604,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const execArgv = action.buildCommand(args, actionCtx);
     if (execArgv.length === 0) {
       return refuse(action.name, args, 'execution-failed', ctx, 'buildCommand returned empty argv');
+    }
+    if (elevation === 'sudo' && !argvCarriesSudo(execArgv)) {
+      return refuse(action.name, args, 'execution-failed', ctx, 'approved sudo but resolved command lacks sudo');
     }
     const commandScrubbed = scrubText(argvToShell(execArgv), userScrub);
 

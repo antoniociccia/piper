@@ -69,3 +69,38 @@ export function buildSshArgvForEnv(
     ...(connectTimeoutSec === undefined ? {} : { connectTimeoutSec }),
   });
 }
+
+/**
+ * Deterministically transform an already-built non-interactive `sudo -n` ssh
+ * argv into its interactive form, without re-deriving the inner command:
+ *   - drop the `-o BatchMode=yes` pair,
+ *   - ensure `-tt` is present (insert right after `ssh` if absent),
+ *   - replace every `sudo -n ` with `sudo ` (the remote command is one argv
+ *     element, so the swap happens inside the quoted string).
+ * Pure, no I/O.
+ */
+export function toInteractive(argv: readonly string[]): readonly string[] {
+  // Drop the `-o BatchMode=yes` pair (exact match, so an unrelated `-o <opt>`
+  // is never consumed). The `sudo -n` → `sudo` rewrite is applied ONLY to the
+  // last element — the remote command string — and only to its FIRST
+  // occurrence, so an ssh option value or a remote command that merely mentions
+  // "sudo -n " as grep data is left intact.
+  const kept: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const cur = argv[i];
+    if (cur === undefined) continue;
+    if (cur === '-o' && argv[i + 1] === 'BatchMode=yes') {
+      i += 1; // skip the value too
+      continue;
+    }
+    kept.push(cur);
+  }
+  const lastIdx = kept.length - 1;
+  const out = kept.map((el, i) => (i === lastIdx ? el.replace('sudo -n ', 'sudo ') : el));
+  if (!out.includes('-tt')) {
+    const sshIdx = out.indexOf('ssh');
+    if (sshIdx >= 0) out.splice(sshIdx + 1, 0, '-tt');
+    else out.unshift('-tt');
+  }
+  return out;
+}

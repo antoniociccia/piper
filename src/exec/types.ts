@@ -1,5 +1,7 @@
+import type { Tier } from '../actions/types.ts';
 import type { Environment } from '../environments/types.ts';
 import type { AuditLogId, EvidenceId, SessionId } from '../memory/types.ts';
+import type { Elevation } from '../security/elevation.ts';
 
 export type RefuseReason =
   | 'unknown-action'
@@ -10,9 +12,11 @@ export type RefuseReason =
   | 'tier-not-allowed'
   | 'timeout'
   | 'execution-failed'
-  | 'mutation-no-approval'  // mutate/destructive action invoked but no approval callback wired
-  | 'mutation-rejected'     // user declined the approval prompt
-  | 'verify-failed';        // mutation executed but the verify step rejected the result
+  | 'mutation-no-approval'    // mutate/destructive action invoked but no approval callback wired
+  | 'mutation-rejected'       // user declined the approval prompt
+  | 'verify-failed'           // mutation executed but the verify step rejected the result
+  | 'elevation-rejected'      // user declined the sudo-elevation prompt
+  | 'sudo-password-required'; // `sudo -n` needs a password/TTY; non-interactive run cannot proceed
 
 /**
  * Snapshot of a proposed mutation, sent to the human approver. The approver
@@ -46,10 +50,44 @@ export type MutationApprovalCallback = (
   proposal: MutationProposal,
 ) => Promise<MutationDecision>;
 
+/**
+ * Snapshot of a proposed privilege elevation (sudo), sent to the human
+ * approver. Orthogonal to the mutation proposal: a `read` action can still
+ * need sudo (e.g. `iptables -L`). The verbatim `sudo -n …` command is shown.
+ * The same {@link MutationDecision} verbs apply:
+ *
+ *   - approve-once     run elevated, this call only.
+ *   - approve-remember run elevated + remember (action, environment) for the
+ *                      session. IGNORED for destructive-tier actions —
+ *                      destructive sudo is always fresh.
+ *   - reject           refuse the elevation; no execution.
+ */
+export interface ElevationProposal {
+  readonly actionName: string;
+  readonly tier: Tier;
+  readonly args: unknown;
+  readonly commandScrubbed: string; // verbatim `sudo -n …`
+  readonly environment?: Environment;
+  /** `proactive` = action's defaultElevation; `reactive` = a sudo re-run after permission-denied. */
+  readonly origin: 'proactive' | 'reactive';
+  /** True for mutate+sudo unless config disables — UI should ask for a second confirmation. */
+  readonly doubleConfirm: boolean;
+}
+
+export type ElevationApprovalCallback = (
+  proposal: ElevationProposal,
+) => Promise<MutationDecision>;
+
 export interface ExecContext {
   readonly sessionId: SessionId;
   readonly timeoutMs?: number;
   readonly environment?: Environment;
+  /**
+   * Forced elevation for THIS invocation, set by a reactive sudo re-run
+   * (Task 4). When 'sudo', the executor treats the action as wanting sudo even
+   * if its `defaultElevation` is 'none' — but it still goes through the gate.
+   */
+  readonly elevation?: Elevation;
 }
 
 export interface ExecResult {
