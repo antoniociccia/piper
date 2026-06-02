@@ -202,6 +202,91 @@ gate today. M2 introduces the approval flow.
 
 ---
 
+## Sudo elevation (M2)
+
+Some commands need root: reading protected logs, inspecting kernel tables,
+running Docker on a host where the SSH user lacks the group. PIPER can propose
+`sudo` for these without weakening the gate. See
+[ADR-004](decisions/ADR-004-sudo-elevation.md) for the full rationale.
+
+### Elevation is orthogonal to tier
+
+An invocation carries `elevation: 'none' | 'sudo'`, independent of
+`read | mutate | destructive`. An action may declare `defaultElevation: 'sudo'`
+(proactive) or the Executor may offer elevation after detecting a
+permission-denied failure (reactive). Either way, the decision is the human's.
+
+`src/security/elevation.ts` exports `elevateRemoteCommand(command, mode)` — the
+**only** place `sudo -n` is prepended to an inner command. All actions that need
+root route through it; no action hard-codes `sudo` by hand. The helper is
+idempotent: a command already starting with `sudo` is returned unchanged.
+
+### Gate flow for sudo
+
+```
+  wantsSudo?
+     │
+     ├── path denylist check (runs BEFORE the elevation gate)
+     │   any string arg that looks like a path (starts `/` or `~/`)
+     │   is checked — refused path-denied even if the user would approve
+     │
+     ├── remembered this session? (env-scoped, in-memory Set)
+     │   └─ yes → elevation = 'sudo', no prompt
+     │
+     └── onElevationProposal callback
+         shows verbatim `sudo -n …` command to the user
+         three choices:
+           (a) approve-once      → elevation='sudo', run once
+           (b) approve-remember  → elevation='sudo', remember (session-only)
+           (c) reject            → refused elevation-rejected
+             ↑
+             destructive tier: approve-remember silently dropped,
+             treated as approve-once — never stored, never persistent
+
+  after buildCommand() — re-validation:
+    resolved argv must carry sudo
+    if not → refused execution-failed (tampering / build-command bug guard)
+
+  audit: verbatim sudo command written to audit_log.command_scrubbed
+```
+
+Every sudo invocation — read-tier included — passes this gate. Silent
+privilege escalation is not possible.
+
+### `sudo -n` → TTY passthrough fallback
+
+1. **`sudo -n <cmd>`** (default): non-interactive. Works when the SSH user has
+   `NOPASSWD` in sudoers. No password anywhere.
+2. **Password required**: if `sudo -n` exits non-zero and stderr matches a
+   password/TTY-required pattern (`/a password is required/i`, etc.), the
+   Executor surfaces a TTY-passthrough proposal.
+3. **TTY passthrough** (opt-in, per command): `src/exec/ssh.ts#toInteractive`
+   transforms the existing `sudo -n` argv — drops `-o BatchMode=yes`, inserts
+   `-tt`, replaces `sudo -n` with `sudo` in the remote command string. The
+   Executor runs the child with **inherited stdio**. The sudo prompt and the
+   typed password happen on the user's TTY; PIPER's piped-capture path is not
+   used. Only the exit code is captured. This is the only path that breaks
+   `BatchMode=yes`, and it is opt-in per command.
+
+### Security invariants
+
+- **Every sudo is gated.** Read-tier elevation requires approval, not silence.
+- **Path denylist applies to sudo args.** `sudo cat ~/.ssh/id_rsa` is refused
+  before the elevation prompt is shown, regardless of what the user might
+  approve.
+- **Re-validation on the final command.** The LLM cannot get a benign command
+  approved and then swap in an elevated version (or vice versa).
+- **`destructive+sudo` is never remembered.** "Don't ask again" is disabled for
+  the destructive tier, elevated or not.
+- **Password material never enters PIPER.** `sudo -n` carries no password. The
+  TTY passthrough's inherited stdio means the password is typed on the user's
+  terminal and never reaches any PIPER buffer, log, or model message.
+- **Session-only remember.** `approve-remember` stores an `(environment,
+  actionName)` key in an in-memory `Set` for the current process. It is never
+  written to PGlite. A new session re-prompts.
+
+---
+
 ## Watch mode (M3a)
 
 Watch mode adds continuous, unattended monitoring without putting the LLM in

@@ -6,6 +6,67 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.4.0] — 2026-06-02
+
+### Added — TUI / answer presentation
+
+- Answers render as clean markdown-flavoured prose — bold cyan headings,
+  `•` bullets, inline `**bold**` / `` `code` `` and dimmed `[ev-N]` citations —
+  instead of colour-cycling per-paragraph bars that read as an alternating-row
+  table. Parsing lives in a pure, unit-tested `report-markdown` module.
+- The synthesizer renders metrics (disk per filesystem, memory, per-container
+  resources, before/after values, …) as compact ASCII tables instead of prose,
+  so aligned numbers are scannable at a glance. The verifier exempts table rows
+  from the citation requirement; the `[ev-N]` citation sits in the row.
+- Status bar collapsed to a single row: mascot, model name in light grey beside
+  it, an inverse `HUMAN`/`YOLO` chip, then cost · tokens · credit.
+
+### Added — Sudo elevation
+
+- Gated `sudo` for any tier, read included: every elevated command requires
+  explicit human approval before it runs. Silent privilege escalation is not
+  possible.
+- `defaultElevation: 'sudo'` on catalog actions: actions that almost always
+  need root declare it once; the Executor resolves and gates it automatically.
+- Session-only, environment-scoped `approve-remember`: one approval covers all
+  subsequent identical `(environment, action)` sudo invocations in the same
+  process. Never persisted to PGlite. A new session re-prompts.
+- Path denylist extended to all path-valued args under any name: a string arg
+  whose value starts with `/` or `~/` is checked against the denylist before
+  the elevation prompt is shown, closing the `sudo cat <denied-path>` hole.
+- Reactive sudo: a non-elevated permission-denied failure (`permission denied`,
+  `must be root`, `operation not permitted`, etc.) triggers an elevation
+  proposal to the TUI. The LLM does not decide — the gate offers, the human
+  approves.
+- `sudo -n` (non-interactive) first. On a password-required failure, an
+  **interactive `ssh -tt` passthrough** (opt-in, per command): the user types
+  the password on their own terminal via inherited stdio; the password never
+  enters PIPER's buffers, evidence table, audit log, or model context.
+- TUI sudo approval panel: distinct styling with SUDO badge, verbatim command
+  shown, approve-once / approve-remember / reject choices.
+- Double-confirm for `mutate+sudo`: two confirmation messages before an
+  elevated mutation executes. Configurable via `sudo_double_confirm_mutate`
+  (default `true`).
+- `approve-remember` is disabled for `destructive+sudo`: elevated destructive
+  actions prompt every time, consistent with the non-elevated destructive rule.
+
+### Security — Sudo elevation
+
+- Every sudo is gated and re-validated: after `buildCommand()` runs, the
+  Executor checks the resolved argv actually carries `sudo` before spawning.
+  A bug or tampering that drops the elevation between approval and execution is
+  refused (`execution-failed`), not silently run as non-elevated.
+- Password material never enters PIPER: `sudo -n` carries no password; the TTY
+  passthrough uses inherited stdio, so no password transits PIPER's buffers,
+  pre-LLM scrubber, audit log, or model messages.
+- `destructive+sudo` is never remembered: `approve-remember` on a destructive
+  action is silently downgraded to `approve-once`.
+- Environment-scoped sudo keys: a remembered `staging` sudo does not fire on
+  `prod` (re-matched on the resolved `(environment, actionName)` inside the
+  Executor).
+
+---
+
 ## [0.3.0] — 2026-06-01
 
 ### Added — Watch mode (M3a)

@@ -294,6 +294,15 @@ Five overlapping defenses, applied at every layer:
   `body.provider.data_collection = 'deny'`. Local mode routes inference through
   Ollama / llama.cpp / LM Studio / vLLM — network egress for inference is zero.
 
+**Sudo elevation** — PIPER can propose running a command with `sudo` for
+commands that need root (either because the planner knows in advance, or
+reactively after a permission-denied failure). Every elevation — read-tier
+included — is shown to you and requires explicit approval. The path denylist
+still blocks sensitive files (`~/.ssh/id_rsa`, `~/.aws/credentials`, etc.)
+under sudo, before the approval prompt is shown. If the host requires a sudo
+password, you type it on your own terminal via an interactive `ssh -tt`
+session; PIPER's buffers, audit log, and model messages never see it.
+
 Full design rationale in [`docs/architecture.md`](docs/architecture.md) and
 [`docs/decisions/ADR-001-deterministic-gate.md`](docs/decisions/ADR-001-deterministic-gate.md).
 
