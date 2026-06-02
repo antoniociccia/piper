@@ -6,6 +6,24 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.4.4] — 2026-06-02
+
+### Added
+
+- `docker.compose_restart` action — actually restarts the stack
+  (`docker compose restart`). "riavvia il compose" / "restart" now proposes a
+  real restart instead of `docker.compose_up`, which is idempotent and does
+  nothing when the stack is already current ("no restart performed"). The
+  planner maps "riavvia"/"restart"/"bounce" → restart and "compose up"/
+  "(re)deploy" → up. Elevation-aware, so it inherits the reactive sudo flow.
+
+### Changed
+
+- No automatic follow-up round by default (`max_followup_iterations` now
+  defaults to 0). The extra round mostly re-ran a read and repeated the answer
+  the user had already read; one prompt now yields one answer. Opt back in via
+  `max_followup_iterations` in `~/.piper/credentials.json`.
+
 ## [0.4.3] — 2026-06-02
 
 ### Fixed
