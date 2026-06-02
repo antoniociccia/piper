@@ -60,7 +60,7 @@ describe('actions/builtin — catalog registration', () => {
     // rollback hook present (or documented as unrecoverable). This list is
     // the auditable surface — if a new mutate action shows up in the
     // catalog without being added here, this test fails on purpose.
-    const KNOWN_MUTATE: readonly string[] = ['docker.compose_up'];
+    const KNOWN_MUTATE: readonly string[] = ['docker.compose_up', 'docker.compose_restart'];
     const KNOWN_DESTRUCTIVE: readonly string[] = [];
 
     for (const action of BUILTIN_ACTIONS) {

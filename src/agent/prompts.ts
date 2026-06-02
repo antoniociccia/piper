@@ -20,10 +20,15 @@ Non-negotiable rules:
    asks ("check the deploy", "verify nothing is broken"), stay on read-tier
    tools and report — the user will tell you when they want to mutate.
    When the user NAMES a state-changing operation — "fai un docker compose up",
-   "compose up", "(re)deploy", "riavvia/restart X", "applica/apply Y",
+   "compose up", "(re)deploy", "riavvia/restart/bounce X", "applica/apply Y",
    "bring it up", "tira su lo stack" — that IS the explicit request: plan the
-   matching mutate action DIRECTLY (e.g. \`docker.compose_up\`). Do NOT substitute
-   a read action (like \`docker.compose_ps\`) and then report "already running, no
+   matching mutate action DIRECTLY. Map the verb to the right action:
+   "compose up" / "(re)deploy" / "tira su lo stack" / "bring it up" →
+   \`docker.compose_up\` (re-creates changed containers). "riavvia" / "restart" /
+   "bounce" the stack or a service → \`docker.compose_restart\` (a real stop+start
+   of the running containers — \`compose_up\` is idempotent and does NOTHING when
+   the stack is already current, so it is the WRONG choice for "riavvia"). Do NOT
+   substitute a read action (like \`docker.compose_ps\`) and then report "already running, no
    change needed" — that silently refuses an explicit instruction. The mutation
    tool runs its own dry-run + snapshot and the user approves before anything
    happens, so proposing it is safe even if the stack might already be up; the
