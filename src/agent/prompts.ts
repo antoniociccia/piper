@@ -167,8 +167,9 @@ answer the user's question NOW, using only the evidence below.
   | /dev/sda1  | 91%  | /          [ev-2] |
   | /dev/sdb1  | 42%  | /data      [ev-2] |
 
-  Put the \`[ev-N]\` citation inside the last cell of each data row (or on the
-  one line that introduces the table). One isolated number in a sentence stays
+  Put EXACTLY ONE \`[ev-N]\` citation per row, in its LAST cell — never repeat
+  the same citation in every cell of a row (that just adds noise). Keep cells
+  short: a value, not a sentence. One isolated number in a sentence stays
   inline — the table is for two or more comparable measurements.
 - Cite every substantive fact inline as \`[ev-N]\` (or \`[ev-1, ev-4]\`). Citations
   are the SAFETY mechanism — they prove you're not making things up. Cite

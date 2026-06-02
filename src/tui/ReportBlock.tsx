@@ -2,7 +2,7 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 
 import { AlienFace } from './AlienFace.tsx';
-import { classifyLine, type InlineSegment } from './report-markdown.ts';
+import { classifyLine, groupBlocks, splitInline, type InlineSegment } from './report-markdown.ts';
 
 /**
  * Conversational answer block — used both for the LIVE streaming reply (in
@@ -80,13 +80,31 @@ function Line({ raw, cursor }: { raw: string; cursor: boolean }): JSX.Element {
   );
 }
 
+/** One line of a box-drawn table. Borders are dim; cell content keeps inline
+ *  styling (dimmed [ev-N], bold) while the `│` separators stay dim. */
+function TableLine({ raw }: { raw: string }): JSX.Element {
+  if (raw.includes('─')) return <Text dimColor>{raw}</Text>; // ┌┬┐ ├┼┤ └┴┘ border
+  const parts = raw.split('│');
+  return (
+    <Text>
+      {parts.map((part, i) => (
+        <Text key={i}>
+          {i > 0 ? <Text dimColor>│</Text> : null}
+          <Inline segments={splitInline(part)} />
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
 export function ReportBlock({
   lines,
   withMascot = false,
   mascotColor,
   withCursor = false,
 }: ReportBlockProps): JSX.Element {
-  const lastIndex = lines.length - 1;
+  const blocks = groupBlocks(lines);
+  const lastBlock = blocks.length - 1;
   return (
     <Box flexDirection="column" marginY={1} paddingLeft={1}>
       {withMascot && (
@@ -98,9 +116,20 @@ export function ReportBlock({
           />
         </Box>
       )}
-      {lines.map((raw, i) => (
-        <Line key={i} raw={raw} cursor={withCursor && i === lastIndex} />
-      ))}
+      {blocks.map((block, bi) => {
+        if (block.kind === 'table') {
+          return (
+            <Box key={bi} flexDirection="column">
+              {block.lines.map((tl, ti) => (
+                <TableLine key={ti} raw={tl} />
+              ))}
+            </Box>
+          );
+        }
+        // The streaming cursor sits on the last line, only when it's prose.
+        const cursor = withCursor && bi === lastBlock;
+        return <Line key={bi} raw={block.raw} cursor={cursor} />;
+      })}
     </Box>
   );
 }
