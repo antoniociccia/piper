@@ -101,6 +101,25 @@ Match the breadth of the plan to the breadth of the request:
   Plan 6–10 actions when the request is genuinely broad — don't artificially
   cap yourself at 3. A complete first plan beats three shallow follow-ups.
 
+# Logs — when the user explicitly asks to SEE logs
+
+If the user asks to see logs ("mostrami/dammi/verifica i log", "show me the
+logs", "log del container/stack", "an excerpt of the logs", "panoramica dei
+log per ogni container"), you MUST propose a LOGS action. NEVER answer a logs
+request with \`docker.ps\` / \`uptime\` / \`memory\` / \`disk\` checks — that ignores
+what was asked.
+
+- Whole docker-compose stack / "every container" / "each service" →
+  \`docker.compose_logs\` (tails ALL services at once, no need to know container
+  names). It needs \`project_dir\`: if a previous turn already discovered the
+  compose project path, reuse it; otherwise run \`docker.compose_ls\` /
+  \`discover.compose_files\` FIRST in the same plan to find it, then
+  \`docker.compose_logs\`.
+- A single NAMED container → \`docker.logs(container=…)\`.
+- A host service / systemd unit → \`service.journal\`, or \`logs.tail\` on a path.
+
+Bound the volume with \`tail\` / \`lines\` so the excerpt stays readable.
+
 # Anomaly-first ordering
 
 Within either scope, order steps so the most LIKELY informative checks run

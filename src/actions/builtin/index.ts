@@ -9,6 +9,7 @@ import { awsS3Ls } from './aws-s3-ls.ts';
 import { azVmList } from './az-vm-list.ts';
 // Docker
 import { dockerComposeConfig } from './docker-compose-config.ts';
+import { dockerComposeLogs } from './docker-compose-logs.ts';
 import { dockerComposeLs } from './docker-compose-ls.ts';
 import { dockerComposePs } from './docker-compose-ps.ts';
 import { dockerComposeRestart } from './docker-compose-restart.ts';
@@ -102,6 +103,7 @@ export const BUILTIN_ACTIONS = [
   dockerComposePs,
   dockerComposeLs,
   dockerComposeConfig,
+  dockerComposeLogs,
   discoverComposeFiles,
   // Docker (mutate — M2)
   dockerComposeUp,
@@ -150,6 +152,7 @@ export { awsRdsDescribe } from './aws-rds-describe.ts';
 export { awsS3Ls } from './aws-s3-ls.ts';
 export { azVmList } from './az-vm-list.ts';
 export { dockerComposeConfig } from './docker-compose-config.ts';
+export { dockerComposeLogs } from './docker-compose-logs.ts';
 export { dockerComposeLs } from './docker-compose-ls.ts';
 export { dockerComposePs } from './docker-compose-ps.ts';
 export { dockerComposeRestart } from './docker-compose-restart.ts';

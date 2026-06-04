@@ -37,7 +37,8 @@ const argsSchema = z.object({
     .string()
     .regex(PATH_PATTERN, 'project_dir must be a safe path')
     .min(1)
-    .refine((p) => p.startsWith('/'), { message: 'project_dir must be an absolute path' }),
+    .refine((p) => p.startsWith('/'), { message: 'project_dir must be an absolute path' })
+    .refine((p) => !p.split('/').includes('..'), { message: 'project_dir must not contain .. segments' }),
   /**
    * Optional single service to restart. If omitted, every container in the
    * compose project is restarted. Per-service keeps the blast radius small.
