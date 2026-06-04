@@ -25,7 +25,7 @@ export const discoverComposeFiles: Action<Args, DiscoverComposeFilesResult> = {
   description:
     'Find docker-compose files on disk under standard deployment roots (/opt, /srv, /home, /root) to discover compose projects that may not be currently running. Read-only.',
   argsSchema,
-  buildCommand: (args, ctx) => {
+  buildCommand: (_args, ctx) => {
     const env = requireEnv(ctx);
     // find <roots> -maxdepth 4 \( -name docker-compose.yml -o -name docker-compose.yaml \) 2>/dev/null
     const argv: string[] = [
