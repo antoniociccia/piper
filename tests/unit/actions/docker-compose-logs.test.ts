@@ -57,6 +57,11 @@ describe('docker.compose_logs', () => {
     expect(dockerComposeLogs.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/orderly' }).success).toBe(true);
   });
 
+  test('rejects a mid-path .. traversal segment', () => {
+    expect(dockerComposeLogs.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/../etc' }).success).toBe(false);
+    expect(dockerComposeLogs.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/orderly' }).success).toBe(true);
+  });
+
   test('parseResult returns raw trimmed stdout', () => {
     const r = dockerComposeLogs.parseResult(
       { stdout: 'api  | starting\ndb   | ready\n', stderr: '', exitCode: 0 },

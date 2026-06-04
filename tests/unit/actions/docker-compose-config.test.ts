@@ -38,4 +38,9 @@ describe('docker.compose_config', () => {
     expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: 'relative/path' }).success).toBe(false);
     expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/orderly' }).success).toBe(true);
   });
+
+  test('rejects a mid-path .. traversal segment', () => {
+    expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/../etc' }).success).toBe(false);
+    expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/orderly' }).success).toBe(true);
+  });
 });
