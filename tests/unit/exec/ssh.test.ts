@@ -10,9 +10,17 @@ describe('exec/ssh — buildSshArgv', () => {
       '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=accept-new',
       '-o', 'ConnectTimeout=5',
+      '-o', 'ServerAliveInterval=15',
+      '-o', 'ServerAliveCountMax=3',
       'user@h',
       'true',
     ]);
+  });
+
+  test('ServerAlive keepalives are always present (prevent idle-disconnect, detect dead peers)', () => {
+    const argv = buildSshArgv({ host: 'h', command: ['true'] });
+    expect(argv).toContain('ServerAliveInterval=15');
+    expect(argv).toContain('ServerAliveCountMax=3');
   });
 
   test('multi-arg command is shell-quoted into a single remote string', () => {

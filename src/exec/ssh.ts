@@ -2,6 +2,8 @@ import type { Environment } from '../environments/types.ts';
 import { argvToShell } from './types.ts';
 
 const DEFAULT_CONNECT_TIMEOUT_SEC = 5;
+const DEFAULT_SERVER_ALIVE_INTERVAL_SEC = 15;
+const DEFAULT_SERVER_ALIVE_COUNT_MAX = 3;
 
 export interface SshOptions {
   readonly host: string;
@@ -40,6 +42,11 @@ export function buildSshArgv(opts: SshOptions): readonly string[] {
     '-o', 'BatchMode=yes',
     '-o', 'StrictHostKeyChecking=accept-new',
     '-o', `ConnectTimeout=${connectTimeout}`,
+    // Keepalives: prevent idle-disconnect during slow commands (e.g. docker compose ls
+    // against a stressed daemon) and detect a dead peer → ssh exits cleanly with non-zero
+    // instead of hanging or receiving an unexplained abrupt close.
+    '-o', `ServerAliveInterval=${DEFAULT_SERVER_ALIVE_INTERVAL_SEC}`,
+    '-o', `ServerAliveCountMax=${DEFAULT_SERVER_ALIVE_COUNT_MAX}`,
   ];
 
   if (opts.port !== undefined) {
