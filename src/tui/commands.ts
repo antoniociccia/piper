@@ -190,6 +190,22 @@ export function parseSlashCommand(line: string): ParseResult | null {
     return { ok: false, message: `unknown env subcommand: ${sub}` };
   }
 
+  if (head === 'annex') {
+    const rest = trimmed.slice(1 + head.length).trim();
+    return {
+      ok: true,
+      command: { kind: 'annex', ...(rest === '' ? {} : { title: rest }) },
+    };
+  }
+
+  if (head === 'skill' || head === 'skills') {
+    const rest = trimmed.slice(1 + head.length).trim();
+    return {
+      ok: true,
+      command: { kind: 'skill', ...(rest === '' ? {} : { target: rest }) },
+    };
+  }
+
   return { ok: false, message: `unknown command: /${head}` };
 }
 
@@ -206,6 +222,7 @@ const SLASH_COMMANDS: readonly SlashCompletion[] = [
   { command: '/save ', hint: '[filename] — save last report' },
   { command: '/session-report ', hint: '[filename] — recap whole session' },
   { command: '/annex ', hint: '[title] — annex this session as solved-case' },
+  { command: '/skill', hint: 'list available analysis skills' },
   { command: '/model', hint: 'switch active model (local or OpenRouter)' },
   { command: '/memory', hint: 'inspect / manage the knowledge base (runbooks, ADRs, annex)' },
   { command: '/watch', hint: '[plan|description] — start a continuous monitoring loop' },
