@@ -15,4 +15,7 @@ describe('discovery actions are registered', () => {
   test('docker.compose_config is in the catalog as read-tier', () => {
     expect(c.resolve('docker.compose_config')?.tier).toBe('read');
   });
+  test('docker.compose_logs is in the catalog as read-tier', () => {
+    expect(c.resolve('docker.compose_logs')?.tier).toBe('read');
+  });
 });
