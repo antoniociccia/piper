@@ -3,7 +3,7 @@ import type { PGlite } from '@electric-sql/pglite';
 import type { ChatHistory } from '../memory/chat-history.ts';
 import type { CostTracker } from '../models/cost.ts';
 import type { CompleteRequest, ModelClient } from '../models/types.ts';
-import type { SessionId } from '../memory/types.ts';
+import type { RagDocKind, SessionId } from '../memory/types.ts';
 import type { EmbeddingClient } from '../rag/embedding-client.ts';
 import { vectorLiteral } from '../rag/embedding-client.ts';
 import { chunkMarkdown, hashContent } from '../rag/chunker.ts';
@@ -36,9 +36,57 @@ or filing as a post-incident note.
 - Start IMMEDIATELY with the executive summary — no preamble.
 - Aim for 400–900 words. Be specific, not generic.`;
 
+export interface IngestReportDocInput {
+  readonly db: PGlite;
+  readonly embedder: EmbeddingClient;
+  readonly source: string;
+  readonly kind: RagDocKind;
+  readonly markdown: string;
+}
+
+/** The single place a generated report is embedded + stored in rag_documents.
+ *  DELETE-then-INSERT by source so re-runs replace cleanly. Best-effort: a
+ *  failure returns ragStored: false rather than throwing. */
+export async function ingestReportDoc(
+  input: IngestReportDocInput,
+): Promise<{ ragStored: boolean; ragChunkCount: number }> {
+  try {
+    const chunks = chunkMarkdown(input.markdown);
+    await input.db.query(`DELETE FROM rag_documents WHERE source = $1`, [input.source]);
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      if (chunk === undefined) continue;
+      const hash = await hashContent(chunk.content);
+      const embedding = await input.embedder.embed(chunk.content);
+      await input.db.query(
+        `INSERT INTO rag_documents
+           (source, kind, chunk_index, heading_path, content, embedding, content_hash, model_id)
+         VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8)`,
+        [
+          input.source,
+          input.kind,
+          i,
+          chunk.headingPath,
+          chunk.content,
+          vectorLiteral(embedding),
+          hash,
+          input.embedder.modelId,
+        ],
+      );
+    }
+    return { ragStored: true, ragChunkCount: chunks.length };
+  } catch {
+    return { ragStored: false, ragChunkCount: 0 };
+  }
+}
+
 export interface BuildSessionReportInput {
   readonly sessionId: SessionId;
   readonly title?: string;
+  /** RAG document kind for the stored report. Default 'session-summary'. */
+  readonly ragKind?: RagDocKind;
+  /** RAG source prefix (`${prefix}:${sessionId}`). Default 'session-summary'. */
+  readonly ragSourcePrefix?: string;
 }
 
 export interface BuildSessionReportDeps {
@@ -119,36 +167,16 @@ export async function buildSessionReport(
   let ragStored = false;
   let ragChunkCount = 0;
   if (deps.db !== undefined && deps.embedder !== undefined) {
-    try {
-      const chunks = chunkMarkdown(reportMarkdown);
-      const source = `session-summary:${input.sessionId}`;
-      // Wipe any prior version (e.g. if user re-runs /session-report).
-      await deps.db.query(`DELETE FROM rag_documents WHERE source = $1`, [source]);
-      for (let i = 0; i < chunks.length; i += 1) {
-        const chunk = chunks[i];
-        if (chunk === undefined) continue;
-        const hash = await hashContent(chunk.content);
-        const embedding = await deps.embedder.embed(chunk.content);
-        await deps.db.query(
-          `INSERT INTO rag_documents
-             (source, kind, chunk_index, heading_path, content, embedding, content_hash, model_id)
-           VALUES ($1, 'session-summary', $2, $3, $4, $5::vector, $6, $7)`,
-          [
-            source,
-            i,
-            chunk.headingPath,
-            chunk.content,
-            vectorLiteral(embedding),
-            hash,
-            deps.embedder.modelId,
-          ],
-        );
-      }
-      ragStored = true;
-      ragChunkCount = chunks.length;
-    } catch {
-      // RAG storage is best-effort.
-    }
+    const prefix = input.ragSourcePrefix ?? 'session-summary';
+    const out = await ingestReportDoc({
+      db: deps.db,
+      embedder: deps.embedder,
+      source: `${prefix}:${input.sessionId}`,
+      kind: input.ragKind ?? 'session-summary',
+      markdown: reportMarkdown,
+    });
+    ragStored = out.ragStored;
+    ragChunkCount = out.ragChunkCount;
   }
 
   return { reportMarkdown, costUsd, ragStored, ragChunkCount };
