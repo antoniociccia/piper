@@ -57,6 +57,10 @@ import type { CheckOutcome, WatchEvent, WatchPlan } from '../monitor/types.ts';
 import { InvalidWatchPlanError } from '../monitor/types.ts';
 import { createWatchStore } from '../monitor/watch-store.ts';
 import { createNotifier } from '../notify/notifier.ts';
+import { loadSkillsFromDir, defaultSkillsDir, parseSkill } from '../skills/loader.ts';
+import { STOCK_SKILLS } from '../skills/stock.ts';
+import { runAnalyze } from '../agent/analyze.ts';
+import { detectAnalyzeIntent } from '../agent/analyze-intent.ts';
 
 import { AgentEventLine } from './AgentEventLine.tsx';
 import { AlienFace } from './AlienFace.tsx';
@@ -820,6 +824,71 @@ export function App(deps: AppDeps): JSX.Element {
         }
         return;
       }
+      if (cmd.kind === 'annex') {
+        if (deps.chatHistory === undefined) {
+          appendError('chat history not available — cannot annex this session');
+          return;
+        }
+        if (deps.db === undefined || deps.embedder === undefined) {
+          appendError('knowledge base not available — annex needs the RAG store (db + embedder)');
+          return;
+        }
+        appendInfo('annexing this session as a solved-case…');
+        dispatch({ type: 'set-busy', busy: true });
+        try {
+          const out = await buildSessionReport(
+            {
+              sessionId: currentSessionId,
+              ...(cmd.title === undefined ? {} : { title: cmd.title }),
+              ragKind: 'solved-case',
+              ragSourcePrefix: 'solved-case',
+            },
+            {
+              chatHistory: deps.chatHistory,
+              client: currentClient,
+              costTracker: deps.costTracker,
+              db: deps.db,
+              embedder: deps.embedder,
+            },
+          );
+          if (out.reportMarkdown === '') {
+            appendError('nothing to annex yet (no conversation history)');
+            return;
+          }
+          dispatch({
+            type: 'append-entry',
+            entry: { kind: 'report', id: nextId(), markdown: out.reportMarkdown, verified: true },
+          });
+          if (out.costUsd > 0) dispatch({ type: 'inc-cost', usd: out.costUsd });
+          appendInfo(
+            `annexed as solved-case${out.ragStored ? ` · indexed (${out.ragChunkCount} chunks)` : ' · RAG store failed'}`,
+          );
+        } catch (err) {
+          appendError(`annex failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          dispatch({ type: 'set-busy', busy: false });
+        }
+        return;
+      }
+      if (cmd.kind === 'skill') {
+        const loaded = await loadSkillsFromDir(defaultSkillsDir(), deps.catalog);
+        for (const f of loaded.failures) {
+          appendError(`skipped skill ${f.path}: ${f.message}`);
+        }
+        appendInfo('stock skills:');
+        for (const s of STOCK_SKILLS) {
+          const parsed = parseSkill(s.text, 'stock');
+          appendInfo(`  ${parsed.name} — ${parsed.description}`);
+        }
+        if (loaded.skills.length > 0) {
+          appendInfo('your skills:');
+          for (const e of loaded.skills) {
+            appendInfo(`  ${e.skill.name} — ${e.skill.description}`);
+          }
+        }
+        appendInfo('Skills specialize an analyze run; matching is automatic (coming next).');
+        return;
+      }
       if (cmd.kind === 'model') {
         if (deps.onSwitchModel === undefined) {
           appendError('/model is not available — startup did not wire a model switcher');
@@ -912,10 +981,10 @@ export function App(deps: AppDeps): JSX.Element {
   );
 
   const runAgent = useCallback(
-    async (userText: string): Promise<void> => {
+    async (userText: string, sourceOverride?: AsyncIterable<AgentEvent>): Promise<void> => {
       dispatch({ type: 'set-busy', busy: true });
       const runner = runnerRef.current;
-      if (runner === null) {
+      if (runner === null && sourceOverride === undefined) {
         appendError('agent runner not initialized');
         dispatch({ type: 'set-busy', busy: false });
         return;
@@ -947,10 +1016,10 @@ export function App(deps: AppDeps): JSX.Element {
       }
 
       try {
-        for await (const event of runner.run({
-          userRequest: userText,
-          sessionId: currentSessionId,
-        })) {
+        const source =
+          sourceOverride ??
+          runner!.run({ userRequest: userText, sessionId: currentSessionId });
+        for await (const event of source) {
           if (event.type === 'synthesize-chunk') {
             // Append delta to the partial; emit each completed line into the
             // scrollback as its own entry. The partial (without trailing \n)
@@ -1266,8 +1335,22 @@ export function App(deps: AppDeps): JSX.Element {
       }
       return;
     }
+    const envs = await deps.registry.list();
+    const intent = detectAnalyzeIntent(text, envs.map((e) => e.name));
+    if (intent !== null) {
+      const analyzeSource = runAnalyze(
+        { userRequest: text, sessionId: currentSessionId, environment: intent.environment },
+        {
+          executor: deps.executor,
+          client: currentClient,
+          costTracker: deps.costTracker,
+        },
+      );
+      await runAgent(text, analyzeSource);
+      return;
+    }
     await runAgent(text);
-  }, [state.input, handleSlashCommand, handleWatchCommand, runAgent, appendError]);
+  }, [state.input, handleSlashCommand, handleWatchCommand, runAgent, appendError, deps.registry, deps.executor, deps.costTracker, currentClient, currentSessionId]);
 
   const resolveApproval = useCallback(
     (decision: ProposalDecision) => {

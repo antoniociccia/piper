@@ -190,6 +190,25 @@ describe('tui/commands — /watch', () => {
   });
 });
 
+describe('parseSlashCommand — annex & skill', () => {
+  test('/annex with no title', () => {
+    const r = parseSlashCommand('/annex');
+    expect(r).toEqual({ ok: true, command: { kind: 'annex' } });
+  });
+  test('/annex with a multi-word title', () => {
+    const r = parseSlashCommand('/annex redis OOM postmortem');
+    expect(r).toEqual({ ok: true, command: { kind: 'annex', title: 'redis OOM postmortem' } });
+  });
+  test('/skill with no target lists', () => {
+    const r = parseSlashCommand('/skill');
+    expect(r).toEqual({ ok: true, command: { kind: 'skill' } });
+  });
+  test('/skill <name>', () => {
+    const r = parseSlashCommand('/skill django-stack');
+    expect(r).toEqual({ ok: true, command: { kind: 'skill', target: 'django-stack' } });
+  });
+});
+
 describe('tui/commands — unknown commands', () => {
   test('/unknown returns error', () => {
     const r = parseSlashCommand('/unknown');
