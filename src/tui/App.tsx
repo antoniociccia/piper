@@ -57,6 +57,8 @@ import type { CheckOutcome, WatchEvent, WatchPlan } from '../monitor/types.ts';
 import { InvalidWatchPlanError } from '../monitor/types.ts';
 import { createWatchStore } from '../monitor/watch-store.ts';
 import { createNotifier } from '../notify/notifier.ts';
+import { loadSkillsFromDir, defaultSkillsDir, parseSkill } from '../skills/loader.ts';
+import { STOCK_SKILLS } from '../skills/stock.ts';
 
 import { AgentEventLine } from './AgentEventLine.tsx';
 import { AlienFace } from './AlienFace.tsx';
@@ -864,6 +866,25 @@ export function App(deps: AppDeps): JSX.Element {
         } finally {
           dispatch({ type: 'set-busy', busy: false });
         }
+        return;
+      }
+      if (cmd.kind === 'skill') {
+        const loaded = await loadSkillsFromDir(defaultSkillsDir(), deps.catalog);
+        for (const f of loaded.failures) {
+          appendError(`skipped skill ${f.path}: ${f.message}`);
+        }
+        appendInfo('stock skills:');
+        for (const s of STOCK_SKILLS) {
+          const parsed = parseSkill(s.text, 'stock');
+          appendInfo(`  ${parsed.name} — ${parsed.description}`);
+        }
+        if (loaded.skills.length > 0) {
+          appendInfo('your skills:');
+          for (const e of loaded.skills) {
+            appendInfo(`  ${e.skill.name} — ${e.skill.description}`);
+          }
+        }
+        appendInfo('Skills specialize an analyze run; matching is automatic (coming next).');
         return;
       }
       if (cmd.kind === 'model') {
