@@ -37,7 +37,8 @@ const argsSchema = z.object({
   project_dir: z
     .string()
     .regex(PATH_PATTERN, 'project_dir must be a safe path')
-    .min(1),
+    .min(1)
+    .refine((p) => p.startsWith('/'), { message: 'project_dir must be an absolute path' }),
   /**
    * Optional single service to (re)start. If omitted, the whole compose
    * project is brought up. We keep the door open to per-service deploys

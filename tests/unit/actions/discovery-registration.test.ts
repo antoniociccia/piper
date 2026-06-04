@@ -12,4 +12,7 @@ describe('discovery actions are registered', () => {
   test('discover.compose_files is in the catalog as read-tier', () => {
     expect(c.resolve('discover.compose_files')?.tier).toBe('read');
   });
+  test('docker.compose_config is in the catalog as read-tier', () => {
+    expect(c.resolve('docker.compose_config')?.tier).toBe('read');
+  });
 });
