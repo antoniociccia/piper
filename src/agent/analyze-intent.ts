@@ -26,6 +26,17 @@ export function detectAnalyzeIntent(
   );
   if (named !== undefined) return { environment: named };
 
+  // Fuzzy fallback: a word in the text that is a prefix (>=4 chars) of exactly
+  // one env name resolves to it (e.g. "singularity" -> "singularityhive").
+  // Ambiguous prefixes (matching 2+ envs) are left unresolved on purpose.
+  const words = (trimmed.toLowerCase().match(/[a-z0-9-]+/g) ?? []).filter((w) => w.length >= 4);
+  const prefixMatches = environmentNames.filter((name) =>
+    words.some((w) => name.toLowerCase().startsWith(w)),
+  );
+  if (prefixMatches.length === 1 && prefixMatches[0] !== undefined) {
+    return { environment: prefixMatches[0] };
+  }
+
   // No env named: default only when there is exactly one registered.
   if (environmentNames.length === 1 && environmentNames[0] !== undefined) {
     return { environment: environmentNames[0] };

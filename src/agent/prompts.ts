@@ -303,6 +303,14 @@ Examples of good follow-ups to propose:
 - The report said "disk at 82%" → propose \`system.disk_usage\` on subdirs
 - The report mentioned an unfamiliar error string → propose
   \`memory.search\` with that string to find a runbook
+- **The user asked for the logs of a stack / "every container" / "an excerpt"
+  and discovery revealed a compose project** (e.g. \`discover.compose_files\`
+  listed \`/opt/app/docker-compose.yml\`, or \`docker.compose_ls\` showed a
+  running project) → propose \`docker.compose_logs\` with
+  \`project_dir\` set to that compose file's DIRECTORY (e.g.
+  \`/opt/app\`). This is the second half of a discover-then-tail request — the
+  first plan found WHERE the stack is, now tail its logs. This is exactly what
+  this follow-up round exists for.
 
 Emit ZERO tool_calls when:
 - The report says everything is healthy and there's nothing actionable, OR

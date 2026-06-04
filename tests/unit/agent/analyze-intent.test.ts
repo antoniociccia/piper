@@ -25,4 +25,16 @@ describe('detectAnalyzeIntent', () => {
   test('returns null for a slash command', () => {
     expect(detectAnalyzeIntent('/watch demo', ['demo'])).toBeNull();
   });
+
+  // Prefix-match fallback
+  test('resolves a prefix of an env name ("singularity" -> "singularityhive")', () => {
+    expect(detectAnalyzeIntent('analizza singularity e dammi i log', ['singularityhive', 'staging'])).toEqual({ environment: 'singularityhive' });
+  });
+  test('an ambiguous prefix (matches 2+ envs) does not resolve', () => {
+    expect(detectAnalyzeIntent('analizza prod', ['prod-01', 'prod-02'])).toBeNull();
+  });
+  test('a too-short token does not prefix-match', () => {
+    // "x" is <4 chars; with 2 envs and no whole-word/long-prefix match, stays null
+    expect(detectAnalyzeIntent('analizza x', ['singularityhive', 'staging'])).toBeNull();
+  });
 });
