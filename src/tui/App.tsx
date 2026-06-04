@@ -820,6 +820,52 @@ export function App(deps: AppDeps): JSX.Element {
         }
         return;
       }
+      if (cmd.kind === 'annex') {
+        if (deps.chatHistory === undefined) {
+          appendError('chat history not available — cannot annex this session');
+          return;
+        }
+        if (deps.db === undefined || deps.embedder === undefined) {
+          appendError('knowledge base not available — annex needs the RAG store (db + embedder)');
+          return;
+        }
+        appendInfo('annexing this session as a solved-case…');
+        dispatch({ type: 'set-busy', busy: true });
+        try {
+          const out = await buildSessionReport(
+            {
+              sessionId: currentSessionId,
+              ...(cmd.title === undefined ? {} : { title: cmd.title }),
+              ragKind: 'solved-case',
+              ragSourcePrefix: 'solved-case',
+            },
+            {
+              chatHistory: deps.chatHistory,
+              client: currentClient,
+              costTracker: deps.costTracker,
+              db: deps.db,
+              embedder: deps.embedder,
+            },
+          );
+          if (out.reportMarkdown === '') {
+            appendError('nothing to annex yet (no conversation history)');
+            return;
+          }
+          dispatch({
+            type: 'append-entry',
+            entry: { kind: 'report', id: nextId(), markdown: out.reportMarkdown, verified: true },
+          });
+          if (out.costUsd > 0) dispatch({ type: 'inc-cost', usd: out.costUsd });
+          appendInfo(
+            `annexed as solved-case${out.ragStored ? ` · indexed (${out.ragChunkCount} chunks)` : ' · RAG store failed'}`,
+          );
+        } catch (err) {
+          appendError(`annex failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          dispatch({ type: 'set-busy', busy: false });
+        }
+        return;
+      }
       if (cmd.kind === 'model') {
         if (deps.onSwitchModel === undefined) {
           appendError('/model is not available — startup did not wire a model switcher');
