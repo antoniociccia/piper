@@ -33,4 +33,9 @@ describe('docker.compose_config', () => {
     );
     expect(r.raw).toBe('services:\n  api:\n    image: node:22');
   });
+  test('rejects a relative or traversal project_dir (must be absolute)', () => {
+    expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: '../../../etc' }).success).toBe(false);
+    expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: 'relative/path' }).success).toBe(false);
+    expect(dockerComposeConfig.argsSchema.safeParse({ environment: 'demo', project_dir: '/opt/orderly' }).success).toBe(true);
+  });
 });
