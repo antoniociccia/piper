@@ -6,6 +6,8 @@ export type SlashCommand =
   | { readonly kind: 'quit' }
   | { readonly kind: 'save'; readonly filename?: string }
   | { readonly kind: 'session-report'; readonly filename?: string }
+  | { readonly kind: 'annex'; readonly title?: string }
+  | { readonly kind: 'skill'; readonly target?: string }
   | { readonly kind: 'model'; readonly target?: string }
   | { readonly kind: 'resume' }
   | { readonly kind: 'memory' }
