@@ -78,11 +78,13 @@ export interface AgentRunner {
 export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
   const maxRetries = deps.maxSynthesizeRetries ?? 1;
   const historyLimit = deps.historyTurnLimit ?? 6;
-  // Default: NO auto-follow-up round (1 prompt = 1 answer). An extra round
-  // re-runs gather + re-synthesises, which in practice mostly REPEATS the answer
-  // the user already read — noise, not value. Set max_followup_iterations > 0 in
-  // ~/.piper/credentials.json to opt back into proactive deeper investigation.
-  const maxFollowupIterations = deps.maxFollowupIterations ?? 0;
+  // Default: ONE follow-up round. The proposer fires only when there's a
+  // concrete gap to close (it emits zero tool_calls when the report is already
+  // complete), so simple prompts stay 1-prompt-1-answer — but multi-step
+  // requests (e.g. "show me the logs" needs discover-then-tail) get the
+  // chaining round they require. Set max_followup_iterations: 0 in
+  // ~/.piper/credentials.json to disable.
+  const maxFollowupIterations = deps.maxFollowupIterations ?? 1;
 
   async function* run(req: RunRequest): AsyncIterable<AgentEvent> {
     // LLM trace queue — populated by the onTrace callbacks we pass to each
