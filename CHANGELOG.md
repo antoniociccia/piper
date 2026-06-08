@@ -6,6 +6,60 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.5.0] — 2026-06-08
+
+Smart Analyze + Skills foundation + diagnostics & hardening born from
+dogfooding PIPER against a real production host.
+
+### Added
+
+- **Smart Analyze.** A natural-language "analyze &lt;host&gt;" (IT/EN) routes to a
+  dedicated deterministic orchestrator (`runAnalyze`) that runs a fixed,
+  read-only discovery sweep — OS/kernel, CPU, memory, disk, uptime/load, top
+  processes, listening ports, docker-compose projects, Kubernetes context,
+  active systemd services — then writes one grounded baseline report where every
+  claim cites its evidence. The sweep is the same every run (reproducible); the
+  LLM only writes the prose, it never picks the checks. Routing resolves the
+  target environment by exact name or by an unambiguous prefix (so "analyze
+  singularity" finds the `singularityhive` env).
+- **Skills (foundation).** Markdown skill files in `~/.piper/skills/` with YAML
+  frontmatter, validated against the action catalog at load (read-tier actions
+  only — a skill naming a mutate/destructive action is rejected). Ships a
+  built-in `default` baseline skill; `/skill` lists stock + user skills. This is
+  the base for specializing an analysis to a known stack (matcher, selection,
+  and drill land in later releases).
+- **`/annex [title]`** — file the current session as a `solved-case` document in
+  the knowledge base (pgvector RAG). The command was advertised in the UI but
+  never wired; it now works. Backed by a shared `ingestReportDoc` helper.
+- New read-only actions: `docker.compose_ls` (discover compose projects),
+  `discover.compose_files` (find compose files under `/opt` `/srv` `/home`
+  `/root`), `docker.compose_config` (render the merged compose to inspect
+  `depends_on` conditions and declared healthchecks), and `docker.compose_logs`
+  (tail every service of a stack in one shot).
+- **SSH keepalives** (`ServerAliveInterval` / `ServerAliveCountMax`) on every
+  connection — keep the link warm during slow commands and detect a dead peer
+  cleanly (clean failure instead of an abrupt drop or a hang). Motivated by a
+  real host whose Docker daemon, under load, dropped the SSH connection on a
+  heavy `docker compose` probe.
+
+### Changed
+
+- One follow-up round is enabled by default again (`max_followup_iterations`
+  defaults to 1). The proposer chains a second batch of read actions for
+  discover-then-act requests (e.g. discover where a stack lives, then tail its
+  logs) and emits zero tool calls when the report is already complete, so simple
+  prompts stay quiet. Set `max_followup_iterations: 0` in
+  `~/.piper/credentials.json` to disable.
+- The planner now reaches for a logs action (`docker.compose_logs`,
+  `docker.logs`, `service.journal`) on an explicit "show me the logs" request
+  instead of answering with resource checks.
+
+### Fixed / Security
+
+- Compose actions now require an **absolute** `project_dir` and reject any `..`
+  path segment, closing a path-traversal gap in the gate across all compose
+  actions.
+
 ## [0.4.4] — 2026-06-02
 
 ### Added
