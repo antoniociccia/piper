@@ -71,24 +71,26 @@ cat <<'EOF'
   Once PIPER opens, type EACH prompt and wait for the reply to finish before
   moving on. Take your time — asciinema will compress idle gaps later.
 
-  Prompt order — restart + reactive sudo (the v0.4.x money shot):
+  Prompt order — Smart Analyze + log drill (the v0.5.x money shot):
 
     1.  /env add demo deploy@localhost:2222 --key demo/keys/piper-demo
-    2.  restart the compose stack at /opt/orderly on demo — redis OOM'd
-        and the worker is down
-        (planner proposes 'docker.compose_restart'; approval panel appears)
-        → press 'y' on the plan-approval panel
-        → the read-only snapshot probe hits "permission denied … Docker
-          daemon socket" → SUDO ELEVATION PANEL appears
-        → approve sudo — the whole mutation re-runs elevated
-        → MAGENTA MUTATION PANEL appears with the verbatim 'sudo -n docker
-          compose … restart' command, dry-run, pre-state snapshot, and the
-          [a]/[r]/[n] row
-        → press 'a' (approve once) — execute + verify run, every service
-          comes back up
-    3.  is everything running now?
-        (read-only follow-up; grounded answer citing compose ps)
-    4.  /quit
+    2.  analyze demo and show me the logs of every container
+        → deterministic plan of 12 read steps appears; press 'y' to approve
+        → docker steps hit "permission denied … Docker daemon socket" →
+          SUDO PANEL appears: press 'r' (remember for this session) so the
+          remaining docker probes don't re-prompt
+        → baseline report streams (specs, top processes, ports, the orderly
+          compose project with worker+redis exited)
+        → FOLLOW-UP PROPOSAL appears: docker.compose_logs(/opt/orderly)
+          — the drill PIPER chained from its own discovery. Press 'y'
+        → report EXTENDS itself with the log findings: redis OOM-killed →
+          worker refused to start → web in degraded mode. Connected, cited.
+    3.  /quit
+
+  NOTE: kubectl.context_current fails on the demo host (no kubectl) — that's
+  fine, it shows graceful degradation as a reported failed step.
+  Do ONE dry run before recording: the follow-up proposal is LLM-driven, so
+  verify the proposer actually chains docker.compose_logs on your model.
 
   Tip: don't worry about typos — re-run the script to redo the take.
   Tip: terminal recommended size 120×32 — wider feels cinematic, ≥32 rows
