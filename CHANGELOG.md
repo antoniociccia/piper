@@ -6,6 +6,20 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.5.1] — 2026-06-10
+
+### Added
+
+- **Analyze + logs in one prompt.** `runAnalyze` (Smart Analyze) gains the
+  bounded follow-up round: after the verified baseline report, the proposer can
+  chain further read actions — e.g. tail the whole compose stack's logs with
+  the `project_dir` the discovery just found — behind the same approval gate.
+  "analizza demo e dammi i log di ogni container" now completes end-to-end in a
+  single prompt: discovery sweep → grounded baseline → proposed
+  `docker.compose_logs` → approval → report extended with the log findings.
+  One round by default; evidence ids stay globally unique; a declined proposal
+  leaves the baseline report untouched.
+
 ## [0.5.0] — 2026-06-08
 
 Smart Analyze + Skills foundation + diagnostics & hardening born from
