@@ -1344,13 +1344,19 @@ export function App(deps: AppDeps): JSX.Element {
           executor: deps.executor,
           client: currentClient,
           costTracker: deps.costTracker,
+          catalog: deps.catalog,
+          registry: deps.registry,
+          approveProposals,
+          ...(deps.maxFollowupIterations === undefined
+            ? {}
+            : { maxFollowupIterations: deps.maxFollowupIterations }),
         },
       );
       await runAgent(text, analyzeSource);
       return;
     }
     await runAgent(text);
-  }, [state.input, handleSlashCommand, handleWatchCommand, runAgent, appendError, deps.registry, deps.executor, deps.costTracker, currentClient, currentSessionId]);
+  }, [state.input, handleSlashCommand, handleWatchCommand, runAgent, appendError, approveProposals, deps.registry, deps.executor, deps.costTracker, deps.catalog, currentClient, currentSessionId]);
 
   const resolveApproval = useCallback(
     (decision: ProposalDecision) => {
