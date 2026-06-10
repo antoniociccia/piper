@@ -228,6 +228,9 @@ case "${1:-}" in
         --all) all_flag=1; shift ;;
         -d|--detach) detach_flag=1; shift ;;
         --remove-orphans) remove_orphans_flag=1; shift ;;
+        --no-color) shift ;;
+        --tail) shift 2 ;;
+        --tail=*) shift ;;
         *) positional+=("$1"); shift ;;
       esac
     done
@@ -239,6 +242,37 @@ case "${1:-}" in
         # Print the live compose file from /opt/orderly so it doubles as a
         # plausible merged-view diff in the approval panel.
         cat /opt/orderly/docker-compose.yml
+        exit 0
+        ;;
+      ls)
+        # Project-level listing — what docker.compose_ls discovers.
+        if [[ -f "$RESTART_MARKER" ]]; then
+          cat <<'EOF'
+NAME      STATUS       CONFIG FILES
+orderly   running(4)   /opt/orderly/docker-compose.yml
+EOF
+        else
+          cat <<'EOF'
+NAME      STATUS                  CONFIG FILES
+orderly   running(2), exited(2)   /opt/orderly/docker-compose.yml
+EOF
+        fi
+        exit 0
+        ;;
+      logs)
+        # Interleaved per-service logs — what docker.compose_logs tails.
+        # Honors an optional service filter; --tail/--no-color are accepted
+        # and ignored (content is fixed). Prefixes match compose's format.
+        service="${positional[1]:-}"
+        emit() { # emit <name> <fn>
+          if [[ -z "$service" || "$service" == "${1#orderly-}" || "$service" == "$1" ]]; then
+            "$2" | sed "s/^/${1}-1  | /"
+          fi
+        }
+        emit orderly-web print_logs_web
+        emit orderly-redis print_logs_redis
+        emit orderly-worker print_logs_worker
+        emit orderly-nginx print_logs_nginx
         exit 0
         ;;
       ps)
