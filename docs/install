@@ -1,0 +1,45 @@
+#!/bin/sh
+# PIPER installer — downloads the right prebuilt binary from the latest
+# GitHub release. No sudo, no package manager, nothing outside this folder.
+# Read me first; I'm short on purpose.
+set -eu
+
+REPO="antoniociccia/piper"
+BASE="https://github.com/${REPO}/releases/latest/download"
+
+os="$(uname -s)"
+arch="$(uname -m)"
+
+case "$os" in
+  Darwin) os="darwin" ;;
+  Linux)  os="linux" ;;
+  *)
+    echo "unsupported OS: $os — grab a binary from https://github.com/${REPO}/releases" >&2
+    exit 1 ;;
+esac
+
+case "$arch" in
+  x86_64|amd64)  arch="x64" ;;
+  arm64|aarch64) arch="arm64" ;;
+  *)
+    echo "unsupported architecture: $arch — grab a binary from https://github.com/${REPO}/releases" >&2
+    exit 1 ;;
+esac
+
+asset="piper-${os}-${arch}"
+echo "downloading ${asset} (latest release)…"
+curl -fL --progress-bar "${BASE}/${asset}" -o piper
+chmod +x piper
+
+# macOS: strip Gatekeeper's quarantine flag if present (binary isn't notarised yet).
+if [ "$os" = "darwin" ]; then
+  xattr -d com.apple.quarantine piper 2>/dev/null || true
+fi
+
+echo
+echo "done. PIPER is ./piper — try:"
+echo
+echo "  ./piper"
+echo
+echo "optionally move it into your PATH:"
+echo "  sudo mv piper /usr/local/bin/"
