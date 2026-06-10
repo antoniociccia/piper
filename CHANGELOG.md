@@ -6,6 +6,18 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.5.2] — 2026-06-10
+
+### Fixed
+
+- **The TUI no longer hangs when two probes ask for sudo at once.** Discovery
+  runs its read steps in parallel; on a host where docker needs sudo, two
+  probes hit the permission boundary simultaneously and both proposed
+  elevation — the second panel overwrote the first, whose approval could then
+  never be answered, and the run sat "thinking" forever. Approval prompts
+  (elevation and mutation) are now serialized: the second panel appears right
+  after you answer the first.
+
 ## [0.5.1] — 2026-06-10
 
 ### Added
