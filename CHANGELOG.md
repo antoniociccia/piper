@@ -6,6 +6,22 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.5.3] — 2026-06-10
+
+### Changed — TUI polish
+
+- The plan now reads like a checklist: headline from the plan's rationale
+  ("baseline analyze discovery of demo · 12 steps") and each step shown as
+  `description · action.name` — raw JSON args only in `/debug`.
+- Check results render as `✓ description · action (123ms)` / `✗ … — reason`;
+  the per-step "running…" lines are hidden in compact view (they landed in the
+  same instant as their results and were pure churn).
+- Follow-up proposals show the step description first, the action dimmed.
+- Welcome banner shows the version and the product contract ("the LLM
+  proposes · the gate validates · you approve").
+- New `src/tui/theme.ts`: shared glyphs + spinner frames (deduplicated) +
+  version string.
+
 ## [0.5.2] — 2026-06-10
 
 ### Fixed
