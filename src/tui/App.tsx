@@ -68,6 +68,7 @@ import { ReportBlock } from './ReportBlock.tsx';
 import { Banner } from './Banner.tsx';
 import { Help } from './Help.tsx';
 import { parseSlashCommand, slashCompletions, type SlashCommand } from './commands.ts';
+import { createApprovalQueue } from './approval-queue.ts';
 import { MemoryViewer } from './MemoryViewer.tsx';
 import { ModelPicker, type ModelSelection } from './ModelPicker.tsx';
 import { WatchPanel, type WatchAnomalyView } from './WatchPanel.tsx';
@@ -634,12 +635,22 @@ export function App(deps: AppDeps): JSX.Element {
   // returns a Promise that resolves when the user presses a/r/n in the TUI.
   // Registered once — the bridge ref in index.tsx stays alive for the
   // lifetime of the App.
+  // Both panels are SINGLE state slots, but the gather phase runs read steps
+  // in parallel — two probes can hit a permission boundary at the same time
+  // and both ask for sudo at once. The queue serializes the prompts so the
+  // second panel only appears after the first is answered (without it, the
+  // second dispatch orphans the first resolver and the run hangs forever).
+  const approvalQueueRef = useRef(createApprovalQueue());
+
   useEffect(() => {
     if (deps.registerMutationApprover === undefined) return;
     deps.registerMutationApprover((proposal) => {
-      return new Promise<MutationDecision>((resolve) => {
-        dispatch({ type: 'pending-mutation', mutation: { proposal, resolve } });
-      });
+      return approvalQueueRef.current.enqueue(
+        () =>
+          new Promise<MutationDecision>((resolve) => {
+            dispatch({ type: 'pending-mutation', mutation: { proposal, resolve } });
+          }),
+      );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -648,9 +659,12 @@ export function App(deps: AppDeps): JSX.Element {
   useEffect(() => {
     if (deps.registerElevationApprover === undefined) return;
     deps.registerElevationApprover((proposal) => {
-      return new Promise<MutationDecision>((resolve) => {
-        dispatch({ type: 'pending-elevation', elevation: { proposal, resolve } });
-      });
+      return approvalQueueRef.current.enqueue(
+        () =>
+          new Promise<MutationDecision>((resolve) => {
+            dispatch({ type: 'pending-elevation', elevation: { proposal, resolve } });
+          }),
+      );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

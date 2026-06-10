@@ -81,8 +81,10 @@ Breakdown of what happens during prompt #2 (all on camera):
    run (specs, top processes, open ports, compose/k8s/systemd discovery).
    Approve with `y`.
 2. The docker probes hit `permission denied … Docker daemon socket` → the
-   **sudo panel** appears. Press `r` (remember for this session) so the
-   remaining docker probes don't re-prompt mid-sweep.
+   **sudo panel** appears. Press `r` (remember for this session). Because the
+   discovery probes run in parallel, a SECOND sudo panel may follow
+   immediately (it was already in flight when you answered the first) —
+   answer it too; everything after that reuses the session approval.
 3. The **grounded baseline report** streams: host specs in an ASCII table,
    the `orderly` compose project discovered at `/opt/orderly` with
    worker + redis **exited** — every claim cited `[ev-N]`.
