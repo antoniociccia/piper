@@ -264,8 +264,13 @@ EOF
         # Honors an optional service filter; --tail/--no-color are accepted
         # and ignored (content is fixed). Prefixes match compose's format.
         service="${positional[1]:-}"
+        # Normalize: accept the compose service name (worker), the container
+        # name (orderly-worker-1), or anything in between — LLM planners pass
+        # either form, and an empty log excerpt kills the diagnosis.
+        svc="${service#orderly-}"
+        svc="${svc%-1}"
         emit() { # emit <name> <fn>
-          if [[ -z "$service" || "$service" == "${1#orderly-}" || "$service" == "$1" ]]; then
+          if [[ -z "$svc" || "$svc" == "${1#orderly-}" ]]; then
             "$2" | sed "s/^/${1}-1  | /"
           fi
         }
