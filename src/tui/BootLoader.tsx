@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 
 import { AlienFace } from './AlienFace.tsx';
+import { spinnerFrame } from './theme.ts';
 
 /**
  * Boot-time loader rendered before the main App mounts.
@@ -18,8 +19,6 @@ export interface BootLoaderProps {
   readonly detail?: string;
 }
 
-const BRAILLE = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 function speechBubble(width: number): { top: string; bottom: string } {
   const inner = '─'.repeat(width);
   return {
@@ -34,7 +33,7 @@ export function BootLoader({ message, detail }: BootLoaderProps): JSX.Element {
     const t = setInterval(() => setTick((x) => x + 1), 90);
     return () => clearInterval(t);
   }, []);
-  const spinner = BRAILLE[tick % BRAILLE.length] ?? '⠋';
+  const spinner = spinnerFrame(tick);
 
   // Pad the bubble to comfortably accommodate the longest typical message.
   // Caps at the terminal width minus the alien + tail glyph.

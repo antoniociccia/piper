@@ -2,6 +2,8 @@ import { Box, Text } from 'ink';
 
 import type { AgentEvent } from '../agent/types.ts';
 
+import { GLYPH, STEP_DESC_WIDTH, spinnerFrame } from './theme.ts';
+
 interface Props {
   readonly event: AgentEvent;
   readonly tick?: number;
@@ -11,11 +13,8 @@ interface Props {
   readonly debug?: boolean;
 }
 
-const BRAILLE = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 function spinnerChar(tick: number | undefined): string {
-  const t = tick ?? 0;
-  return BRAILLE[t % BRAILLE.length] ?? '⠋';
+  return spinnerFrame(tick);
 }
 
 function shorten(s: string, n = 80): string {
@@ -74,40 +73,68 @@ export function AgentEventLine({ event, tick, live = true, debug = false }: Prop
 
     // -- Events shown in default view (the user wants these) --
     case 'plan-ready': {
-      const desc = `plan ready: ${event.plan.steps.length} step(s)`;
+      // The plan's own rationale reads better than a bare step count
+      // ("baseline analyze discovery of demo · 12 read-only steps").
+      const rationale = event.plan.rationale.trim();
+      const headline =
+        rationale === ''
+          ? `plan ready · ${event.plan.steps.length} steps`
+          : `${rationale} · ${event.plan.steps.length} steps`;
+      const pad = String(event.plan.steps.length).length;
+      const descWidth = Math.max(...event.plan.steps.map((s) => s.description.length));
       return (
         <Box flexDirection="column">
           <Text color="cyan">
             {'  '}
-            {desc}
+            {GLYPH.plan} {headline}
             {debug && event.costUsdDelta > 0 ? ` (+$${event.costUsdDelta.toFixed(4)})` : ''}
           </Text>
           {event.plan.steps.map((s, i) => (
-            <Text key={s.id} dimColor>      {i + 1}. {s.actionName}({shorten(JSON.stringify(s.args), 60)})</Text>
+            <Text key={s.id}>
+              {'      '}
+              <Text dimColor>{String(i + 1).padStart(pad)}.</Text> {s.description.padEnd(descWidth)}
+              <Text dimColor>
+                {' '}· {s.actionName}
+                {debug ? `(${shorten(JSON.stringify(s.args), 60)})` : ''}
+              </Text>
+            </Text>
           ))}
         </Box>
       );
     }
     case 'gather-step-started':
-      return (
+      // Gather events land batched after the parallel sweep completes, so a
+      // per-step "running…" line appears at the same instant as its result —
+      // pure churn. The ✓/✗ result lines below are the signal. /debug shows it.
+      return debug ? (
         <Text color="yellow">
           {'  '}
-          {live ? `${spinnerChar(tick)} ` : '○ '}
+          {live ? `${spinnerChar(tick)} ` : `${GLYPH.idle} `}
           {event.step.actionName}…
         </Text>
+      ) : (
+        HIDDEN
       );
     case 'gather-step-done':
       return (
-        <Text color="green">
-          {'  ✓ '}
-          {event.step.actionName}
-          {debug
-            ? ` (exit=${event.evidence.exitCode}, ${event.evidence.durationMs.toFixed(0)}ms)`
-            : ''}
+        <Text>
+          {'  '}
+          <Text color="green">{GLYPH.ok}</Text> {event.step.description.padEnd(STEP_DESC_WIDTH)}
+          <Text dimColor>
+            {' '}· {event.step.actionName} ({event.evidence.durationMs.toFixed(0)}ms)
+            {debug ? ` exit=${event.evidence.exitCode}` : ''}
+          </Text>
         </Text>
       );
     case 'gather-step-failed':
-      return <Text color="red">  ✗ {event.step.actionName} — {shorten(event.failure.reason, 120)}</Text>;
+      return (
+        <Text>
+          {'  '}
+          <Text color="red">{GLYPH.fail}</Text> {event.step.description.padEnd(STEP_DESC_WIDTH)}
+          <Text dimColor> · {event.step.actionName}</Text>
+          <Text color="red"> — {shorten(event.failure.reason, 90)}</Text>
+        </Text>
+      );
     case 'verify-failed':
       // Compact view: only show the line at all if it's the FINAL failure (no
       // retry coming). The interleaved retries are noise. The agent-runner

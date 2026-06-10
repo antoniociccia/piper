@@ -23,7 +23,9 @@ export function Proposals({ proposals, iteration, input }: Props): JSX.Element {
       <Box flexDirection="column" marginTop={1}>
         {proposals.map((p, i) => (
           <Text key={p.id}>
-            {`  [${i + 1}] ${p.actionName}(${shortenArgs(p.args)})`}
+            {'  '}
+            <Text bold>[{i + 1}]</Text> {p.description}
+            <Text dimColor> · {p.actionName}({shortenArgs(p.args)})</Text>
           </Text>
         ))}
       </Box>
