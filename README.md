@@ -162,9 +162,15 @@ flow and the new **watch loop** are diagnostic by construction.
 
 ### Option A — pre-built binary (recommended)
 
-Download the binary for your platform from the
-[latest release](https://github.com/antoniociccia/piper/releases/latest) — no
-Bun, no `node_modules`, single ~76 MB file.
+```bash
+curl -fsSL https://antoniociccia.github.io/piper/install | sh
+```
+
+The script is [40 lines you can read first](docs/install): it detects your
+OS/arch and downloads the matching binary from the latest release. No sudo,
+no package manager. Or do it by hand — grab the binary for your platform from
+the [latest release](https://github.com/antoniociccia/piper/releases/latest) —
+no Bun, no `node_modules`, single ~76 MB file.
 
 ```bash
 # macOS (Apple Silicon)
