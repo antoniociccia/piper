@@ -6,6 +6,15 @@ All notable changes to PIPER are documented here. The format follows
 
 Pre-1.0, breaking changes may land in any `0.x` minor bump but will be flagged here.
 
+## [0.5.4] — 2026-06-10
+
+### Changed
+
+- The boot loader now cycles playful phrases ("counting the containers
+  twice…", "teaching the gate to say no…") in a fresh order every launch,
+  instead of exposing implementation stages; the first-boot model download
+  keeps its progress bar but drops the technical filename.
+
 ## [0.5.3] — 2026-06-10
 
 ### Changed — TUI polish
