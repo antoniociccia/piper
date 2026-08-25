@@ -38,6 +38,7 @@ export function buildDiscoveryPlan(environment: string): Plan {
     { action: 'docker.ps', args: { ...env, all: true }, description: 'containers (incl. stopped)' },
     { action: 'docker.compose_ls', args: { ...env, all: true }, description: 'compose projects' },
     { action: 'discover.compose_files', args: env, description: 'compose files on disk' },
+    { action: 'discover.log_files', args: env, description: 'log files on disk (largest first)' },
     { action: 'kubectl.context_current', args: env, description: 'kubernetes context' },
     { action: 'system.systemctl_list', args: { ...env, state: 'active' }, description: 'active services' },
   ];
@@ -187,11 +188,20 @@ export async function* runAnalyze(
       previousIssues = verification.issues;
     }
 
-    // ── STAGE 2: proposals — only if report verified, callback wired, budget ─
+    // ── STAGE 2: proposals — callback wired + follow-up budget left ──────────
+    //
+    // Deliberately NOT gated on `verification.ok`. Verification failing means
+    // the report could not be grounded in the evidence collected so far, which
+    // is the strongest possible signal that MORE evidence is needed — gating
+    // the drill on it forbade the investigation precisely when it mattered,
+    // and then judged the model on evidence it had been prevented from
+    // gathering. Measured against a host with seven planted incidents: the
+    // larger model scored worse than the smaller one purely because the
+    // smaller one happened to satisfy the verifier and was allowed to look.
     const allowProposals =
       deps.approveProposals !== undefined && followupIteration < maxFollowupIterations;
 
-    if (!allowProposals || !verification.ok) break;
+    if (!allowProposals) break;
 
     let proposals: readonly ProposedStep[] = [];
     try {

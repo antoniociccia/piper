@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { createCatalog } from '../../../src/actions/catalog.ts';
 import { registerBuiltins } from '../../../src/actions/builtin/index.ts';
-import { runAnalyze } from '../../../src/agent/analyze.ts';
+import { buildDiscoveryPlan, runAnalyze } from '../../../src/agent/analyze.ts';
 import type { AgentEvent, ProposalDecision, ProposedStep } from '../../../src/agent/types.ts';
 import type { EnvironmentRegistry } from '../../../src/environments/registry.ts';
 import type { SessionId } from '../../../src/memory/types.ts';
@@ -206,11 +206,14 @@ describe('runAnalyze', () => {
     // Report contains OOM mention
     expect(doneEv.result.reportMarkdown).toContain('OOM');
 
-    // Evidence: 12 discovery + 1 follow-up = 13
-    expect(doneEv.result.evidence.length).toBe(13);
+    // Whole discovery sweep + the one approved follow-up. Derived from the
+    // plan rather than hard-coded, so adding a discovery step does not fail a
+    // test that is really about the follow-up round.
+    const expected = buildDiscoveryPlan('demo').steps.length + 1;
+    expect(doneEv.result.evidence.length).toBe(expected);
 
-    // The last evidence item has id ev-13
+    // Follow-up evidence is renumbered to stay unique across the whole run.
     const lastEvidence = doneEv.result.evidence[doneEv.result.evidence.length - 1];
-    expect(lastEvidence?.id).toBe('ev-13');
+    expect(lastEvidence?.id).toBe(`ev-${expected}`);
   });
 });

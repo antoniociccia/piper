@@ -14,6 +14,7 @@ import { dockerComposeLs } from './docker-compose-ls.ts';
 import { dockerComposePs } from './docker-compose-ps.ts';
 import { dockerComposeRestart } from './docker-compose-restart.ts';
 import { discoverComposeFiles } from './discover-compose-files.ts';
+import { discoverLogFiles } from './discover-log-files.ts';
 import { dockerComposeUp } from './docker-compose-up.ts';
 import { dockerInspect } from './docker-inspect.ts';
 import { dockerLogs } from './docker-logs.ts';
@@ -105,6 +106,7 @@ export const BUILTIN_ACTIONS = [
   dockerComposeConfig,
   dockerComposeLogs,
   discoverComposeFiles,
+  discoverLogFiles,
   // Docker (mutate — M2)
   dockerComposeUp,
   dockerComposeRestart,
@@ -157,6 +159,7 @@ export { dockerComposeLs } from './docker-compose-ls.ts';
 export { dockerComposePs } from './docker-compose-ps.ts';
 export { dockerComposeRestart } from './docker-compose-restart.ts';
 export { discoverComposeFiles } from './discover-compose-files.ts';
+export { discoverLogFiles } from './discover-log-files.ts';
 export { dockerComposeUp } from './docker-compose-up.ts';
 export { dockerInspect } from './docker-inspect.ts';
 export { dockerLogs } from './docker-logs.ts';
