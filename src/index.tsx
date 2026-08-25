@@ -96,10 +96,14 @@ async function readConfig(): Promise<{
         `(length=${c.value.length}, prefix=${c.value.slice(0, 6)})`,
     );
   }
+  // Provider-scoped default: a local runtime cannot resolve an aggregator id,
+  // so the fallback has to come from the provider table rather than a single
+  // remote/local coin flip. See PROVIDERS[...].defaultModel.
   const model =
     readEnv(ENV_VARS.MODEL) ??
     credentials?.defaultModel ??
-    (provider.kind === 'remote' ? 'deepseek/deepseek-v4-pro' : 'mistralai/devstral-small-2-24b');
+    provider.defaultModel ??
+    'deepseek/deepseek-v4-pro';
   const rawBudget = readEnv(ENV_VARS.MAX_SESSION_COST_USD);
   const maxSessionCostUsd =
     rawBudget !== undefined
@@ -370,6 +374,11 @@ async function main(): Promise<void> {
       streaming: true,
     },
     isLocal: provider.kind === 'local',
+    // Local weights are overwhelmingly reasoning models, and with thinking on
+    // they spend the whole budget on a chain of thought that never reaches
+    // `content` — PIPER then sees an empty answer. Frontier remote models are
+    // left on their provider default.
+    ...(provider.kind === 'local' ? { reasoningEffort: 'none' as const } : {}),
     enforcePrivacyDeny: provider.enforcePrivacyDeny,
   });
 
@@ -410,6 +419,7 @@ async function main(): Promise<void> {
             streaming: true,
           },
           isLocal: true,
+          reasoningEffort: 'none',
         });
         await persistModelChoice({ provider: sel.provider, model: sel.model, baseUrl });
       }

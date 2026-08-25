@@ -8,7 +8,7 @@ const argsSchema = z.object({
   environment: z.string(),
   name: z.string().regex(/^[A-Za-z0-9._@-]+$/, 'service name must be safe (alnum . _ @ -)'),
   lines: z.number().int().positive().max(2000).optional(),
-  since: z.string().regex(/^[A-Za-z0-9 :+\-,]+$/, 'since must be a safe relative time, e.g. "10 min ago" or "2024-01-01"').optional(),
+  since: z.string().regex(/^[A-Za-z0-9 :+,-]+$/, 'since must be a safe relative time, e.g. "10 min ago" or "2024-01-01"').optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

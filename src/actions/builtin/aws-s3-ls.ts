@@ -4,11 +4,18 @@ import { buildSshArgvForEnv } from '../../exec/ssh.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
+// Literal slashes are written as `[/]`, not `/` or `\/`. `RegExp#source` — which
+// is what lands in the JSON schema we hand to the model — normalises a bare `/`
+// outside a character class into `\/`, and llama.cpp's json-schema-to-grammar
+// converter refuses that redundant escape, answering HTTP 400 to every request.
+// Inside a class the slash needs no escape, so `[/]` survives the round-trip.
+const S3_URI = new RegExp('^s3:[/][/][A-Za-z0-9._-]+([/][A-Za-z0-9._/-]*)?$');
+
 const argsSchema = z.object({
   environment: z.string(),
-  uri: z.string().regex(/^s3:\/\/[A-Za-z0-9._\-]+(\/[A-Za-z0-9._\-/]*)?$/, 'uri must be s3://bucket[/prefix]').optional(),
-  profile: z.string().regex(/^[A-Za-z0-9_\-]+$/).optional(),
-  region: z.string().regex(/^[A-Za-z0-9\-]+$/).optional(),
+  uri: z.string().regex(S3_URI, 'uri must be s3://bucket[/prefix]').optional(),
+  profile: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
+  region: z.string().regex(/^[A-Za-z0-9-]+$/).optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

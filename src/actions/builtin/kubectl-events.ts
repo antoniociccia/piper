@@ -10,7 +10,7 @@ const argsSchema = z.object({
   environment: z.string(),
   namespace: z.string().regex(SAFE_TOKEN).optional(),
   all_namespaces: z.boolean().optional(),
-  field_selector: z.string().regex(/^[A-Za-z0-9=,!.\-_/]+$/).optional(),
+  field_selector: z.string().regex(/^[A-Za-z0-9=,!._/-]+$/).optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

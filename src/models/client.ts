@@ -26,6 +26,14 @@ export interface OpenAIChatClientOptions {
   readonly defaultModel: string;
   readonly capabilities: ModelCapabilities;
   readonly isLocal: boolean;
+  /**
+   * Sent as `reasoning_effort`. `'none'` is what makes a thinking model answer
+   * instead of spending its whole token budget on a chain of thought that
+   * never reaches `content` — ollama honours it, llama.cpp accepts it, and
+   * `think: false` / `enable_thinking: false` are both ignored. Omitted from
+   * the request entirely when unset.
+   */
+  readonly reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
   readonly enforcePrivacyDeny?: boolean;
   readonly scrubUserPatterns?: readonly RegExp[];
   readonly fetch?: FetchLike;
@@ -35,11 +43,42 @@ export interface OpenAIChatClientOptions {
 interface OpenAIChatChoiceMessage {
   readonly role?: string;
   readonly content?: string | null;
+  /**
+   * Non-standard, returned by ollama (and some proxies) for reasoning models:
+   * the chain of thought goes here and `content` is left empty. Read only to
+   * diagnose an empty answer — never used AS the answer.
+   */
+  readonly reasoning?: string | null;
+  readonly reasoning_content?: string | null;
   readonly tool_calls?: ReadonlyArray<{
     readonly id?: string;
     readonly type?: string;
     readonly function?: { readonly name?: string; readonly arguments?: string };
   }>;
+}
+
+/**
+ * Remove a reasoning model's thinking from an answer.
+ *
+ * Two shapes seen in the wild: a properly matched `<think>…</think>` block, and
+ * — when reasoning is disabled but the chat template still emits the closing
+ * marker — a preamble terminated by an orphan `</think>`. Both must go, or the
+ * thinking ends up quoted in a user-facing report.
+ *
+ * An orphan tag is only treated as a terminator when nothing opened a block and
+ * it sits on its own line, so prose that merely mentions the token mid-sentence
+ * (a log line, say) survives intact.
+ */
+export function stripReasoning(content: string): string {
+  const withoutBlocks = content.replace(/<think>[\s\S]*?<\/think>/g, '');
+
+  if (!withoutBlocks.includes('</think>')) return withoutBlocks.trim();
+
+  const orphan = /^[\s\S]*?(?:^|\n)\s*<\/think>\s*(?:\n|$)/;
+  const match = orphan.exec(withoutBlocks);
+  if (match !== null) return withoutBlocks.slice(match[0].length).trim();
+
+  return withoutBlocks.trim();
 }
 
 interface OpenAIChatChoice {
@@ -206,6 +245,7 @@ export function createOpenAIChatClient(opts: OpenAIChatClientOptions): ModelClie
     if (req.maxTokens !== undefined) body['max_tokens'] = req.maxTokens;
     if (req.temperature !== undefined) body['temperature'] = req.temperature;
     if (req.stop !== undefined && req.stop.length > 0) body['stop'] = req.stop;
+    if (opts.reasoningEffort !== undefined) body['reasoning_effort'] = opts.reasoningEffort;
     if (streaming) {
       body['stream'] = true;
       body['stream_options'] = { include_usage: true };
@@ -241,11 +281,30 @@ export function createOpenAIChatClient(opts: OpenAIChatClientOptions): ModelClie
     const modelId = req.model ?? opts.defaultModel;
     const cost = computeCost(modelId, usage.inputTokens, usage.outputTokens).totalUsd;
 
+    const rawContent = typeof msg.content === 'string' ? msg.content : '';
+    const content = stripReasoning(rawContent);
+    const toolCalls = parseToolCalls(msg);
+
+    // A reasoning model that never stopped thinking returns empty content with
+    // a populated `reasoning` field. Left alone it surfaces far downstream as
+    // "the synthesizer failed to ground its report", which blames the model for
+    // an answer it did produce and hides the real, fixable cause.
+    const reasoning = msg.reasoning ?? msg.reasoning_content ?? '';
+    if (content === '' && toolCalls.length === 0 && reasoning !== null && reasoning !== '') {
+      throw new ModelClientError(
+        `${opts.id} returned only reasoning and no answer ` +
+          `(${reasoning.length} chars of chain-of-thought, finish_reason=${choice?.finish_reason ?? 'unknown'}). ` +
+          `Set reasoning_effort to 'none' for this model, or raise its output token limit.`,
+        200,
+        reasoning.slice(0, 500),
+      );
+    }
+
     return {
       id: json.id ?? `local_${Date.now()}`,
       model: json.model ?? modelId,
-      content: typeof msg.content === 'string' ? msg.content : '',
-      toolCalls: parseToolCalls(msg),
+      content,
+      toolCalls,
       finishReason: normalizeFinishReason(choice?.finish_reason),
       usage,
       costUsd: cost,

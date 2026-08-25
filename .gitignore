@@ -55,3 +55,6 @@ coverage/
 
 # ── Repro scripts (developer scratch — not part of the public surface) ──
 tools/scripts/repro-*.ts
+
+# Seeded config for demo takes — contains local paths, never committed.
+demo/.piper-demo-credentials.json

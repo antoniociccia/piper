@@ -20,7 +20,7 @@ const argsSchema = z.object({
     .optional(),
   label_selector: z
     .string()
-    .regex(/^[A-Za-z0-9=,!.\-_/]+$/, 'label_selector must be a kubectl label selector')
+    .regex(/^[A-Za-z0-9=,!._/-]+$/, 'label_selector must be a kubectl label selector')
     .optional(),
 });
 

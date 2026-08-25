@@ -1,5 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite';
 
+import { LOCAL_ENVIRONMENT, isLocalEnvironmentName } from './local.ts';
+
 import {
   type Environment,
   type EnvironmentInput,
@@ -101,6 +103,11 @@ export function createEnvironmentRegistry(db: PGlite): EnvironmentRegistry {
   }
 
   async function get(name: string): Promise<Environment | null> {
+    // Resolved before the DB is consulted. `local` can never be a row — the
+    // name is reserved in validateEnvironmentInput — but short-circuiting here
+    // means a direct DB write could not shadow it either.
+    if (isLocalEnvironmentName(name)) return LOCAL_ENVIRONMENT;
+
     const result = await db.query<EnvironmentRow>(
       `SELECT name, host, ssh_user, port, identity_file, description, tags
          FROM environments WHERE name = $1`,
@@ -124,16 +131,23 @@ export function createEnvironmentRegistry(db: PGlite): EnvironmentRegistry {
 
   async function describeForLLM(): Promise<string> {
     const envs = await list();
-    if (envs.length === 0) {
-      return 'No environments registered. Use `environments.upsert` (out of scope for M1: configure via wizard) to add one.';
-    }
     const lines = envs.map((e) => {
       const port = e.port === undefined ? '' : `:${e.port}`;
       const tags = e.tags.length === 0 ? '' : ` [${e.tags.join(', ')}]`;
       const desc = e.description === undefined ? '' : ` — ${e.description}`;
       return `- ${e.name}: ${e.sshUser}@${e.host}${port}${tags}${desc}`;
     });
-    return `Available environments (${envs.length}):\n${lines.join('\n')}`;
+
+    // `local` is always available and always listed first. Before it existed,
+    // a fresh install described itself as having nothing to work on, and the
+    // planner correctly refused every request until an SSH host was registered.
+    const localLine = `- ${LOCAL_ENVIRONMENT.name}: ${LOCAL_ENVIRONMENT.description}`;
+    const hint =
+      envs.length === 0
+        ? '\n\nNo remote hosts are registered yet, so `local` is the only target.'
+        : '';
+
+    return `Available environments (${envs.length + 1}):\n${[localLine, ...lines].join('\n')}${hint}`;
   }
 
   return { upsert, remove, get, list, describeForLLM };

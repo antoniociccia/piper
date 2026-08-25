@@ -6,9 +6,9 @@ import { requireEnv } from './helpers.ts';
 
 const argsSchema = z.object({
   environment: z.string(),
-  host: z.string().regex(/^[A-Za-z0-9._\-]+$/).optional(),
+  host: z.string().regex(/^[A-Za-z0-9._-]+$/).optional(),
   port: z.number().int().positive().max(65535).optional(),
-  user: z.string().regex(/^[A-Za-z0-9_\-]+$/).optional(),
+  user: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

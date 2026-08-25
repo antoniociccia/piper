@@ -6,11 +6,11 @@ import { requireEnv } from './helpers.ts';
 
 const argsSchema = z.object({
   environment: z.string(),
-  log_group: z.string().regex(/^[A-Za-z0-9_/.\-]+$/, 'log_group must be a CloudWatch log group name'),
+  log_group: z.string().regex(/^[A-Za-z0-9_/.-]+$/, 'log_group must be a CloudWatch log group name'),
   since: z.string().regex(/^[0-9]+[smhd]$/, 'since must be a duration like 5m, 2h').optional(),
   filter_pattern: z.string().max(200).optional(),
-  profile: z.string().regex(/^[A-Za-z0-9_\-]+$/).optional(),
-  region: z.string().regex(/^[A-Za-z0-9\-]+$/).optional(),
+  profile: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
+  region: z.string().regex(/^[A-Za-z0-9-]+$/).optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

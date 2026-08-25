@@ -6,8 +6,8 @@ import { requireEnv } from './helpers.ts';
 
 const argsSchema = z.object({
   environment: z.string(),
-  project: z.string().regex(/^[a-z0-9\-]+$/).optional(),
-  zone: z.string().regex(/^[a-z0-9\-]+$/).optional(),
+  project: z.string().regex(/^[a-z0-9-]+$/).optional(),
+  zone: z.string().regex(/^[a-z0-9-]+$/).optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

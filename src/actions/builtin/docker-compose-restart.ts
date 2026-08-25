@@ -28,8 +28,8 @@ import { requireEnv } from './helpers.ts';
 //                                                          down, re-bringing it
 //                                                          up is the safe floor)
 
-const PATH_PATTERN = /^[A-Za-z0-9_./\-]+$/;
-const SERVICE_PATTERN = /^[A-Za-z0-9_.\-]+$/;
+const PATH_PATTERN = /^[A-Za-z0-9_./-]+$/;
+const SERVICE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 const argsSchema = z.object({
   environment: z.string(),

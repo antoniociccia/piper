@@ -4,7 +4,7 @@ import { buildSshArgvForEnv } from '../../exec/ssh.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
-const HOSTNAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9\-.]{0,253}[A-Za-z0-9])?$/;
+const HOSTNAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$/;
 
 const argsSchema = z.object({
   environment: z.string(),

@@ -36,5 +36,15 @@ mkdir -p /run/orderly /run/nginx
   exec -a "nginx: worker process" /bin/sleep infinity
 ) </dev/null >/dev/null 2>&1 &
 
+# --- Runaway report generator (REAL cpu load) --------------------------------
+# Unlike the two above, this one actually burns CPU, so `system.process_list`
+# reports a genuine %CPU rather than a number we invented. It is throttled to
+# roughly half a core — enough to stand out in `ps`, not enough to cook the
+# laptop running the demo. Teardown kills it with the container.
+(
+  exec -a "node /opt/orderly/dist/report-generator.js" \
+    /bin/sh -c 'while :; do head -c 400000 /dev/urandom | md5sum >/dev/null; sleep 0.15; done'
+) </dev/null >/dev/null 2>&1 &
+
 # --- sshd (foreground, PID-1 child) -----------------------------------------
 exec /usr/sbin/sshd -D -e

@@ -1,4 +1,5 @@
 import type { Catalog } from '../actions/catalog.ts';
+import { stripReasoning } from '../models/client.ts';
 import { hashPayload, type CostTracker } from '../models/cost.ts';
 import type { CompleteRequest, ModelClient, ToolCall } from '../models/types.ts';
 import type { SessionId } from '../memory/types.ts';
@@ -133,7 +134,10 @@ export async function* synthesizeNodeStream(
     });
   }
 
-  return { reportMarkdown: assembled.trim(), costUsd };
+  // Reasoning models can leak a thinking preamble into the streamed content —
+  // the chunks already reached the TUI, but the report that gets verified,
+  // stored and shown as final must not carry it.
+  return { reportMarkdown: stripReasoning(assembled), costUsd };
 }
 
 export async function synthesizeNode(
@@ -148,7 +152,7 @@ export async function synthesizeNode(
     role: 'synthesize',
     req,
   });
-  return { reportMarkdown: completion.content.trim(), costUsd };
+  return { reportMarkdown: stripReasoning(completion.content), costUsd };
 }
 
 // ── Follow-up proposals (separate call) ──────────────────────────────────
