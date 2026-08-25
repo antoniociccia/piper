@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/piper-logo.png" alt="PIPER" width="320"/>
+<img src="docs/assets/piper-logo-640.png" alt="PIPER" width="320"/>
 
 # PIPER
 
