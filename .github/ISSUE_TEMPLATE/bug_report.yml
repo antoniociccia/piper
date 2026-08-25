@@ -1,0 +1,69 @@
+name: Bug report
+description: Something PIPER did that it should not have done
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a **security** issue — a way to get a command past the gate,
+        run shell outside the executor, leak a secret into a log, or reach a
+        host that was never allowlisted — please do **not** file it here.
+        Report it privately: see [SECURITY.md](../../SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did PIPER do, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The prompt you typed and the actions PIPER chose, if you have them.
+      placeholder: |
+        1. Prompt: "check disk usage on staging"
+        2. PIPER planned: system.disk_usage
+        3. Result: ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PIPER version
+      description: "`piper --version`, a release tag, or a commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: model-backend
+    attributes:
+      label: Model backend
+      options:
+        - Ollama (local)
+        - LM Studio (local)
+        - llama.cpp (local)
+        - vLLM (local)
+        - OpenRouter (remote)
+        - Other / custom endpoint
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "qwen3.5:4b"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.5 arm64 / Ubuntu 24.04 x64"
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: |
+        Paste the report or the error. **Check it for secrets first** — PIPER
+        scrubs what it logs, but a hand-pasted excerpt is on you.
+      render: shell

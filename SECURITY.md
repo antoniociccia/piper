@@ -7,7 +7,7 @@ If you believe you've found a security issue in PIPER, please report it
 
 Use:
 
-- [GitHub Security Advisories](https://github.com/<your-org>/piper/security/advisories/new)
+- [GitHub Security Advisories](https://github.com/antoniociccia/piper/security/advisories/new)
 
 Please include:
 

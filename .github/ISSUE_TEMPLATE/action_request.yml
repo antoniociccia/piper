@@ -1,0 +1,52 @@
+name: New action
+description: Ask for a new entry in the action catalog
+labels: ["action"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PIPER can only run what is in its catalog — that is the safety property,
+        not a limitation to work around. Adding a capability means adding an
+        `Action`, its tests and its docs. This is a good first contribution.
+  - type: input
+    id: tool
+    attributes:
+      label: Which CLI does it drive?
+      placeholder: "systemd-analyze, terraform, gh, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command it should run
+      render: shell
+      placeholder: "systemd-analyze blame --no-pager"
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier
+      description: |
+        `read` never prompts. `mutate` needs approval with a dry-run.
+        `destructive` prompts every single time and can never be remembered.
+      options:
+        - read
+        - mutate
+        - destructive
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What question does it answer?
+      description: The diagnostic the action makes possible, not just the command.
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback (mutate/destructive only)
+      description: |
+        How does it get undone? PIPER does not ship a mutation with no way back —
+        if the CLI offers none, say so and we will decide together.

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/antoniociccia/piper/security/advisories/new
+    about: Report privately. Never open a public issue for a gate bypass or a secret leak.
+  - name: Question or idea
+    url: https://github.com/antoniociccia/piper/discussions
+    about: For anything that is not yet a bug or a concrete request.

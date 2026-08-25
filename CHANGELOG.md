@@ -537,4 +537,4 @@ construction (no shell concatenation), and a result parser.
 - Custom OpenAI-compatible endpoint flow is partial in the wizard; edit
   `~/.piper/credentials.json` by hand for now.
 
-[0.1.0]: https://github.com/<your-org>/piper/releases/tag/v0.1.0
+[0.1.0]: https://github.com/antoniociccia/piper/releases/tag/v0.1.0
