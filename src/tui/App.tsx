@@ -64,7 +64,8 @@ import { detectAnalyzeIntent } from '../agent/analyze-intent.ts';
 
 import { AgentEventLine } from './AgentEventLine.tsx';
 import { AlienFace } from './AlienFace.tsx';
-import { ReportBlock } from './ReportBlock.tsx';
+import { ReportLine, ReportMascot, ReportTable } from './ReportBlock.tsx';
+import { parseTableBlock, renderAlignedTable } from './report-markdown.ts';
 import { Banner } from './Banner.tsx';
 import { Help } from './Help.tsx';
 import { parseSlashCommand, slashCompletions, type SlashCommand } from './commands.ts';
@@ -168,7 +169,7 @@ interface WatchUiState {
   readonly diagnosing: ReadonlySet<string>;
 }
 
-interface State {
+export interface State {
   entries: ChatEntry[];
   input: string;
   busy: boolean;
@@ -195,6 +196,8 @@ interface State {
    *  yet committed to scrollback; promoted to a single `report` entry on
    *  verify-passed, or discarded entirely on verify-failed retrying). */
   streamingLines: readonly string[];
+  /** Table rows held back until the table ends and can be aligned. */
+  pendingTable: readonly string[];
   /** True while a stream is active. */
   streamingActive: boolean;
   pendingApproval?: PendingApproval;
@@ -249,7 +252,41 @@ type Action =
   | { type: 'watch-event'; event: WatchEvent }
   | { type: 'watch-stop' };
 
-function reducer(state: State, action: Action): State {
+/**
+ * Turns held-back table rows into entries. A markdown table only becomes an
+ * aligned box once every row is known, so rows are buffered until something
+ * that is not a row arrives. If they never formed a valid table, they are
+ * emitted verbatim rather than swallowed.
+ */
+function flushPendingTable(
+  entries: readonly ChatEntry[],
+  pending: readonly string[],
+): readonly ChatEntry[] {
+  if (pending.length === 0) return entries;
+  const parsed = parseTableBlock(pending);
+  if (parsed !== null) {
+    return [
+      ...entries,
+      {
+        kind: 'report-table',
+        id: `e-rt-${entries.length}-${Math.random()}`,
+        lines: renderAlignedTable(parsed),
+      },
+    ];
+  }
+  return [
+    ...entries,
+    ...pending.map((text, i) => ({
+      kind: 'report-line' as const,
+      id: `e-rl-${entries.length}-${i}-${Math.random()}`,
+      text,
+    })),
+  ];
+}
+
+const TABLE_ROW = /^\s*\|/;
+
+export function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'set-input':
       return { ...state, input: action.value, autocompleteIndex: 0, autocompleteDismissed: false };
@@ -288,31 +325,86 @@ function reducer(state: State, action: Action): State {
     case 'set-help':
       return { ...state, showHelp: action.show };
     case 'stream-begin':
-      return { ...state, streamingActive: true, streamingPartial: '', streamingLines: [] };
-    case 'stream-line-complete':
-      // The line is part of the active stream — keep it in the DYNAMIC
-      // buffer, NOT in scrollback yet. Only commit on verify-passed (or final
-      // verify-failed); otherwise discard on retry.
+      // Opens an append-only block. Everything from here lands in scrollback as
+      // it arrives, so Ink writes each line once instead of repainting the
+      // whole growing report on every token.
       return {
         ...state,
-        streamingLines: [...state.streamingLines, action.line],
+        entries: [
+          ...state.entries,
+          { kind: 'report-start', id: `e-rs-${state.entries.length}-${Math.random()}` },
+        ],
+        streamingActive: true,
+        streamingPartial: '',
+        streamingLines: [],
+        pendingTable: [],
+      };
+    case 'stream-line-complete': {
+      // Straight to scrollback. `streamingLines` is kept only to assemble the
+      // final markdown for /save and archiving — it is never rendered, because
+      // rendering it is what duplicated the report into the live region.
+      const lines = [...state.streamingLines, action.line];
+      if (TABLE_ROW.test(action.line)) {
+        // Hold it: the alignment needs the rows that have not arrived yet.
+        return {
+          ...state,
+          pendingTable: [...state.pendingTable, action.line],
+          streamingLines: lines,
+          streamingPartial: '',
+        };
+      }
+      const flushed = flushPendingTable(state.entries, state.pendingTable);
+      return {
+        ...state,
+        entries: [
+          ...flushed,
+          {
+            kind: 'report-line',
+            id: `e-rl-${flushed.length}-${Math.random()}`,
+            text: action.line,
+          },
+        ],
+        pendingTable: [],
+        streamingLines: lines,
         streamingPartial: '',
       };
+    }
     case 'stream-set-partial':
       return { ...state, streamingPartial: action.partial };
-    case 'stream-discard':
-      return { ...state, streamingActive: false, streamingPartial: '', streamingLines: [] };
-    case 'stream-commit': {
-      const markdown = state.streamingLines.join('\n');
-      const entry: ChatEntry = {
-        kind: 'report',
-        id: `e-rep-${state.entries.length}-${Math.random()}`,
-        markdown,
-        verified: action.verified,
+    case 'stream-discard': {
+      // The draft is already on screen and Ink's Static contract forbids
+      // taking it back, so say what happened instead of pretending it never
+      // did: the reader sees the claim AND that the gate refused it.
+      const flushed = flushPendingTable(state.entries, state.pendingTable);
+      const marker: ChatEntry = {
+        kind: 'info',
+        id: `e-rj-${flushed.length}-${Math.random()}`,
+        text: 'draft rejected — not every claim carried its evidence; rewriting',
       };
       return {
         ...state,
-        entries: [...state.entries, entry],
+        entries: [...flushed, marker],
+        pendingTable: [],
+        streamingActive: false,
+        streamingPartial: '',
+        streamingLines: [],
+      };
+    }
+    case 'stream-commit': {
+      // Closes the block. The lines are already in scrollback, so this appends
+      // only the terminator — which carries the assembled markdown so /save
+      // still has something to write.
+      const flushed = flushPendingTable(state.entries, state.pendingTable);
+      const entry: ChatEntry = {
+        kind: 'report-end',
+        id: `e-re-${flushed.length}-${Math.random()}`,
+        verified: action.verified,
+        markdown: state.streamingLines.join('\n'),
+      };
+      return {
+        ...state,
+        entries: [...flushed, entry],
+        pendingTable: [],
         streamingActive: false,
         streamingPartial: '',
         streamingLines: [],
@@ -450,7 +542,7 @@ const nextId = (): string => {
   return `e${idCounter}`;
 };
 
-const INITIAL_STATE: State = {
+export const INITIAL_STATE: State = {
   entries: [],
   input: '',
   busy: false,
@@ -470,6 +562,7 @@ const INITIAL_STATE: State = {
   agentPhase: 'idle',
   streamingPartial: '',
   streamingLines: [],
+  pendingTable: [],
   streamingActive: false,
   elevationConfirmArmed: false,
   watch: null,
@@ -787,8 +880,15 @@ export function App(deps: AppDeps): JSX.Element {
         return;
       }
       if (cmd.kind === 'save') {
-        const lastReport = [...state.entries].reverse().find((e) => e.kind === 'report');
-        if (lastReport === undefined || lastReport.kind !== 'report') {
+        // `report-end` closes a streamed report and carries its markdown;
+        // `report` is what a resumed session replays. Either can be the latest.
+        const lastReport = [...state.entries]
+          .reverse()
+          .find((e) => e.kind === 'report' || e.kind === 'report-end');
+        if (
+          lastReport === undefined ||
+          (lastReport.kind !== 'report' && lastReport.kind !== 'report-end')
+        ) {
           appendError('no report to save yet');
           return;
         }
@@ -1739,15 +1839,15 @@ export function App(deps: AppDeps): JSX.Element {
       </Static>
 
       <Box flexDirection="column">
-        {state.streamingActive && (
-          <ReportBlock
-            withMascot
-            lines={[
-              ...state.streamingLines,
-              ...(state.streamingPartial !== '' ? [state.streamingPartial] : []),
-            ]}
-            withCursor={state.streamingPartial !== ''}
-          />
+        {/* Only the in-flight line lives here. Completed lines were already
+            written to scrollback by the reducer, so this block stays one line
+            tall no matter how long the report gets — which is what stops Ink
+            repainting the whole thing on every token. */}
+        {state.streamingActive && state.streamingPartial !== '' && (
+          // ReportLine, not ReportBlock: the block carries marginY, which would
+          // shift the whole view by a row every time a line completes — a
+          // smaller version of the repaint this change exists to remove.
+          <ReportLine raw={state.streamingPartial} cursor />
         )}
         {state.busy && !state.streamingActive && state.agentPhase !== 'idle' && (
           <PhaseIndicator phase={state.agentPhase} />
@@ -2144,32 +2244,23 @@ function EntryView({
         return <AgentEventLine event={entry.event} live={live} debug={debug} />;
       case 'report':
         return <Report markdown={entry.markdown} verified={entry.verified} />;
+      // The three below render a report that arrived line by line. They share
+      // ReportBlock's typography on purpose, so a streamed report and a
+      // replayed one are character-position-identical.
       case 'report-start':
-        return (
-          <Box marginTop={1}>
-            <Text color="cyan" bold>{'  ▌ '}</Text>
-            <AlienFace busy color="cyan" bold />
+        return <ReportMascot />;
+      case 'report-line':
+        return <ReportLine raw={entry.text} />;
+      case 'report-table':
+        return <ReportTable lines={entry.lines} />;
+      case 'report-end':
+        return entry.verified ? (
+          <Text> </Text>
+        ) : (
+          <Box paddingLeft={1}>
+            <Text color="yellow" dimColor>ungrounded — shown anyway</Text>
           </Box>
         );
-      case 'report-line': {
-        const color = 'green';
-        return (
-          <Box>
-            <Text color={color} dimColor>{'  ▌ '}</Text>
-            <Text>{entry.text}</Text>
-          </Box>
-        );
-      }
-      case 'report-end': {
-        const color = entry.verified ? 'green' : 'yellow';
-        const label = entry.verified ? '' : 'unverified';
-        return label === '' ? <Text> </Text> : (
-          <Box>
-            <Text color={color} dimColor>{'  ▌ '}</Text>
-            <Text color={color} dimColor>{label}</Text>
-          </Box>
-        );
-      }
       default:
         return <Text> </Text>;
     }

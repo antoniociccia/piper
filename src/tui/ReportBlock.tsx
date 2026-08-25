@@ -97,6 +97,50 @@ function TableLine({ raw }: { raw: string }): JSX.Element {
   );
 }
 
+/**
+ * One committed line of a streamed report. Same typography as {@link ReportBlock}
+ * — one-column gutter, inline markdown, dimmed citations — so a report that
+ * arrives line by line is character-position-identical to one rendered whole.
+ */
+export function ReportLine({
+  raw,
+  cursor = false,
+}: {
+  raw: string;
+  /** Blinking block at the end — used for the one line still being written. */
+  cursor?: boolean;
+}): JSX.Element {
+  return (
+    <Box paddingLeft={1}>
+      <Line raw={raw} cursor={cursor} />
+    </Box>
+  );
+}
+
+/**
+ * A committed table, already aligned by `renderAlignedTable`. Kept separate from
+ * {@link ReportLine} because column widths depend on every row, so a table
+ * cannot be emitted until its last row has arrived.
+ */
+export function ReportTable({ lines }: { lines: readonly string[] }): JSX.Element {
+  return (
+    <Box flexDirection="column" paddingLeft={1}>
+      {lines.map((tl, i) => (
+        <TableLine key={i} raw={tl} />
+      ))}
+    </Box>
+  );
+}
+
+/** The mascot that opens a streamed report block. */
+export function ReportMascot(): JSX.Element {
+  return (
+    <Box marginTop={1}>
+      <AlienFace busy bold />
+    </Box>
+  );
+}
+
 export function ReportBlock({
   lines,
   withMascot = false,
