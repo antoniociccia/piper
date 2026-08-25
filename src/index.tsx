@@ -370,6 +370,11 @@ async function main(): Promise<void> {
       streaming: true,
     },
     isLocal: provider.kind === 'local',
+    // Local weights are overwhelmingly reasoning models, and with thinking on
+    // they spend the whole budget on a chain of thought that never reaches
+    // `content` — PIPER then sees an empty answer. Frontier remote models are
+    // left on their provider default.
+    ...(provider.kind === 'local' ? { reasoningEffort: 'none' as const } : {}),
     enforcePrivacyDeny: provider.enforcePrivacyDeny,
   });
 
@@ -410,6 +415,7 @@ async function main(): Promise<void> {
             streaming: true,
           },
           isLocal: true,
+          reasoningEffort: 'none',
         });
         await persistModelChoice({ provider: sel.provider, model: sel.model, baseUrl });
       }
