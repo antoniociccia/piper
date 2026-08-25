@@ -68,36 +68,54 @@ cat <<'EOF'
 ================================================================================
   RECORDING THE PIPER DEMO
 
-  Once PIPER opens, type EACH prompt and wait for the reply to finish before
-  moving on. Take your time — asciinema will compress idle gaps later.
+  Everything is already wired: the demo host is registered as `demo`, the
+  model is local, and the data dir is isolated. You only type the prompt.
 
-  Prompt order — Smart Analyze + log drill (the v0.5.x money shot):
+  Wait for each reply to finish before moving on — asciinema compresses the
+  idle gaps afterwards, so thinking time costs the GIF nothing.
 
-    1.  /env add demo deploy@localhost:2222 --key demo/keys/piper-demo
-    2.  analyze demo and show me the logs of every container
-        → deterministic plan of 12 read steps appears; press 'y' to approve
-        → docker steps hit "permission denied … Docker daemon socket" →
-          SUDO PANEL appears: press 'r' (remember for this session) so the
-          remaining docker probes don't re-prompt
-        → baseline report streams (specs, top processes, ports, the orderly
-          compose project with worker+redis exited)
-        → FOLLOW-UP PROPOSAL appears: docker.compose_logs(/opt/orderly)
-          — the drill PIPER chained from its own discovery. Press 'y'
-        → report EXTENDS itself with the log findings: redis OOM-killed →
-          worker refused to start → web in degraded mode. Connected, cited.
-    3.  /quit
+  ── THE TAKE ────────────────────────────────────────────────────────────
 
-  NOTE: kubectl.context_current fails on the demo host (no kubectl) — that's
-  fine, it shows graceful degradation as a reported failed step.
-  Do ONE dry run before recording: the follow-up proposal is LLM-driven, so
-  verify the proposer actually chains docker.compose_logs on your model.
+    1.  analyze demo and tell me everything that is broken
 
-  Tip: don't worry about typos — re-run the script to redo the take.
-  Tip: terminal recommended size 120×32 — wider feels cinematic, ≥32 rows
-       avoids the status bar wrapping.
+        Then, as it runs:
 
-  Stop recording with /quit inside PIPER (clean exit), or Ctrl+D as fallback.
-================================================================================
+        a) A deterministic plan of 13 read steps appears.        press  y
+        b) The docker probes hit "permission denied ... Docker
+           daemon socket", and the SUDO PANEL shows the verbatim
+           elevated command that would run.                      press  r
+           (r = remember for this session, so the remaining
+            docker probes do not prompt again)
+        c) The baseline report streams, every claim carrying an
+           [ev-N] citation back to the command that produced it.
+        d) A FOLLOW-UP PROPOSAL appears — PIPER chaining a drill
+           from its own discovery.                               press  y
+        e) The report EXTENDS itself: redis OOM-killed -> worker
+           refused to start -> web in degraded mode. Connected,
+           and cited.
+
+    2.  Ctrl+C   (twice, to exit)
+
+  ── WHAT THE FRAME SHOULD SHOW ──────────────────────────────────────────
+
+  The status bar reads "qwen3.5:9b  ...  * local". That line is the whole
+  pitch: no API key, no network, nothing leaving the machine.
+
+  ── NOTES ───────────────────────────────────────────────────────────────
+
+  * kubectl.context_current fails on the demo host (no kubectl installed).
+    Leave it in — a reported failed step is graceful degradation, not a flaw.
+  * The follow-up proposal is the one LLM-driven beat, so it is the only
+    non-deterministic part. Do ONE dry run first and check the proposer
+    actually chains a log action on your model. If it does not, re-run.
+  * Terminal size is pinned to 140x44 by the recorder — do not resize.
+  * Typos do not matter. Re-run the script for another take.
+
+  Shorter alternative, if the full take runs long:
+
+    check uptime, memory and disk on demo -- flag anything unhealthy
+
+  Three actions, one approval, a cited report. Less dramatic, much tighter.
 
 EOF
 read -r -p "[record] press Enter to start the recorder, Ctrl+C to abort … " _
@@ -112,9 +130,47 @@ rm -f "$CAST"
 
 # PIPER env for the demo:
 # - isolated data dir → never touches the user's real ~/.piper/data
+# - isolated credentials → never touches the user's real ~/.piper/credentials.json
 # - WASM embedder pre-selected → no embedding-backend wizard during the take
 export PIPER_DATA_DIR="$DEMO_DATA"
 export PIPER_EMBEDDING_BACKEND=wasm
+export PIPER_CREDENTIALS_FILE="${DEMO_DIR:-$REPO_ROOT/demo}/.piper-demo-credentials.json"
+
+# The demo host is registered here rather than typed as `/env add` during the
+# take: the recording should spend its seconds on the product, not on setup.
+# The model is pinned to a local one so the status bar reads "◆ local" — the
+# whole point being that this runs with no API key and no network.
+DEMO_MODEL="${DEMO_MODEL:-qwen3.5:9b}"
+cat > "$PIPER_CREDENTIALS_FILE" <<JSON
+{
+  "default_provider": "ollama",
+  "default_model": "${DEMO_MODEL}",
+  "base_url": "http://localhost:11434/v1",
+  "embedding_backend": "wasm",
+  "max_session_cost_usd": 0.5,
+  "environments": {
+    "demo": {
+      "host": "localhost",
+      "ssh_user": "deploy",
+      "port": 2222,
+      "identity_file": "${REPO_ROOT}/demo/keys/piper-demo",
+      "description": "demo application host",
+      "tags": ["demo"]
+    }
+  }
+}
+JSON
+chmod 600 "$PIPER_CREDENTIALS_FILE"
+
+if ! curl -s -m 3 http://localhost:11434/api/tags >/dev/null 2>&1; then
+  echo "[record] ERROR: no Ollama on :11434. Start it with 'ollama serve'." >&2
+  exit 1
+fi
+if ! curl -s -m 5 http://localhost:11434/api/tags | grep -q "\"${DEMO_MODEL%%:*}"; then
+  echo "[record] ERROR: ${DEMO_MODEL} is not installed. Run: ollama pull ${DEMO_MODEL}" >&2
+  exit 1
+fi
+echo "[record] local model: ${DEMO_MODEL}  ·  demo host registered as 'demo'"
 
 # Pinned canvas: 140 cols × 42 rows.
 #   - 140 wide gives PIPER's status bar room to breathe without wrapping
