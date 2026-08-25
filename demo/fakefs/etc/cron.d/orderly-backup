@@ -1,0 +1,6 @@
+# Nightly application snapshot. Has been failing since 2026-05-25 — see
+# /var/log/orderly/backup.log (the backup volume filled up).
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+0 2 * * * deploy /opt/orderly/bin/backup.sh >> /var/log/orderly/backup.log 2>&1
+*/5 * * * * deploy /opt/orderly/bin/healthcheck.sh >/dev/null 2>&1

@@ -53,7 +53,24 @@ COPY fakefs/etc/motd /etc/motd
 COPY fakefs/opt/orderly/ /opt/orderly/
 COPY fakefs/var/log/orderly/ /var/log/orderly/
 COPY fakefs/var/log/nginx/ /var/log/nginx/
+COPY fakefs/etc/cron.d/orderly-backup /etc/cron.d/orderly-backup
 COPY fakefs/usr/local/sbin/demo-entrypoint.sh /usr/local/sbin/demo-entrypoint.sh
+
+# An expired TLS certificate for the nginx vhost. The file is a placeholder —
+# the evidence PIPER actually reads is the [emerg] line in
+# /var/log/nginx/error.log — but the path has to exist, with a stale mtime, so
+# `system.file_stat` corroborates the log instead of reporting "no such file".
+RUN mkdir -p /etc/nginx/ssl && \
+    printf '%s\n' '-----BEGIN CERTIFICATE-----' \
+      'PIPER-DEMO-PLACEHOLDER-CERTIFICATE-NOT-A-REAL-KEYPAIR' \
+      '-----END CERTIFICATE-----' > /etc/nginx/ssl/orderly.crt && \
+    touch -d '2025-04-30 00:00:00' /etc/nginx/ssl/orderly.crt && \
+    chmod 644 /etc/nginx/ssl/orderly.crt
+
+# A log that outgrew its rotation. Real bytes on disk, so `ls -la` and
+# `system.file_stat` report a genuinely large file rather than a made-up size.
+RUN head -c 48000000 /dev/urandom | base64 > /var/log/orderly/debug-trace.log && \
+    chmod 644 /var/log/orderly/debug-trace.log
 
 # `piper-docker-shim` — DEMO STUB. NOT DOCKER. Static-output emulator that
 # mimics the SHAPE of `docker ps / logs / inspect / compose ps|up|restart` so
