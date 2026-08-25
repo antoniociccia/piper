@@ -48,6 +48,14 @@ const CONCLUSION_LINE_PATTERNS: readonly RegExp[] = [
   // still emit them; we'd rather skip the citation check than retry the whole
   // synth just to strip a "Got it" intro).
   /^\s*(got\s+it|sure|ok|okay|capito|certo|ecco|here'?s\s+(what|the|a)|let\s+me\s+(summari[sz]e|tell)|ok\s*[,:]?\s*here|alright)/i,
+  // Flagged hypotheses. The synthesizer prompt REQUIRES one of these — "name
+  // the symptom and a one-line hypothesis" — and its own worked example is
+  // uncited, because a hypothesis is an inference about the evidence rather
+  // than something any single evidence row states. Counting it as an uncited
+  // claim meant a report could be rejected for doing exactly as instructed.
+  // Leading markdown emphasis is tolerated: models label it `**Worth a look:**`
+  // about as often as they write it plain.
+  /^\s*[*_]{0,2}\s*(worth\s+a\s+look|worth\s+flagging|worth\s+checking|hypothesis|likely\s+cause|probable\s+cause|da\s+guardare|da\s+verificare|vale\s+la\s+pena|ipotesi|causa\s+probabile)\b/i,
 ];
 
 function isConclusionLine(line: string): boolean {

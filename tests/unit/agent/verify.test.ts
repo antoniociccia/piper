@@ -153,3 +153,62 @@ The application log shows repeated connection failures.
     expect(result.issues.some((i) => i.includes('application log shows'))).toBe(true);
   });
 });
+
+/**
+ * The synthesizer prompt does not merely permit a hypothesis line — it demands
+ * one: "Diagnose, don't dictate. If the evidence points to something worth
+ * digging into, FLAG it — name the symptom and a one-line hypothesis." Its own
+ * worked example carries no citation, because a hypothesis is an inference
+ * ABOUT the evidence, not an observation that any single evidence row states.
+ *
+ * The verifier was counting those lines as uncited claims, so a report could be
+ * rejected precisely for obeying its instructions. Observed with qwen3.5:9b on
+ * a report whose every observational claim was cited: 2 of 3 substantive lines
+ * carried a citation, 0.67 fell under the 0.75 threshold, and the whole report
+ * was thrown away over the one line the prompt had asked for.
+ */
+describe('verifyReport — flagged hypotheses', () => {
+  const ev1: EvidenceRef = {
+    id: 'ev-1',
+    auditId: 1 as EvidenceRef['auditId'],
+    actionName: 'docker.ps',
+    args: {},
+    summary: 'containers',
+  };
+
+  test('a "Worth a look" hypothesis does not need its own citation', () => {
+    const md = `
+orderly-redis-1 exited with code 137 and the worker exited with code 1 [ev-1].
+Worth a look: the OOM kill suggests the memory limit is too high for this host.
+`;
+    expect(verifyReport({ markdown: md, evidence: [ev1] }).ok).toBe(true);
+  });
+
+  test('the Italian form is exempt too', () => {
+    const md = `
+orderly-redis-1 exited with code 137 and the worker exited with code 1 [ev-1].
+Da guardare: il kill per OOM fa pensare a un limite di memoria troppo alto.
+`;
+    expect(verifyReport({ markdown: md, evidence: [ev1] }).ok).toBe(true);
+  });
+
+  test('a bold-markdown hypothesis label is recognised', () => {
+    const md = `
+orderly-redis-1 exited with code 137 and the worker exited with code 1 [ev-1].
+**Worth a look:** the OOM kill suggests the memory limit is too high here.
+`;
+    expect(verifyReport({ markdown: md, evidence: [ev1] }).ok).toBe(true);
+  });
+
+  test('an uncited observational claim is still rejected', () => {
+    // The exemption must not become a way to smuggle facts past the gate.
+    const md = `
+orderly-redis-1 exited with code 137 and the worker exited with code 1 [ev-1].
+The nginx access log records 4,812 requests from a single address overnight.
+The root filesystem is at 94% and the backup volume is completely full.
+`;
+    const result = verifyReport({ markdown: md, evidence: [ev1] });
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.includes('nginx access log'))).toBe(true);
+  });
+});
