@@ -3,6 +3,13 @@ import { Box, Text, useApp, useInput } from 'ink';
 
 import { defaultCredentialsPath } from '../config/credentials.ts';
 import { detectLocalProviders, listModelsFor, type DetectedProvider } from '../config/detect.ts';
+import {
+  detectTotalMemoryBytes,
+  formatBytes,
+  recommendLocalModel,
+  type Recommendation,
+} from '../config/hardware.ts';
+import { pullOllamaModel, type PullProgress } from '../config/model-pull.ts';
 import { writeCredentials } from '../config/write-credentials.ts';
 import { DEFAULT_MODEL_BY_TIER, type Tier } from '../models/pricing.ts';
 import { PROVIDERS, type ProviderId } from '../models/providers.ts';
@@ -19,6 +26,8 @@ type Step =
   | { kind: 'api-key'; chosen: BackendChoice }
   | { kind: 'tier'; chosen: BackendChoice; apiKey: string }
   | { kind: 'local-model'; chosen: BackendChoice; models: readonly string[] }
+  | { kind: 'offer-pull'; chosen: BackendChoice; recommendation: Recommendation }
+  | { kind: 'pulling'; chosen: BackendChoice; tag: string }
   | { kind: 'budget'; chosen: BackendChoice; apiKey?: string; tier?: Tier; model: string }
   | { kind: 'env-prompt'; ctx: AssembledConfig }
   | { kind: 'env-name'; ctx: AssembledConfig }
@@ -100,6 +109,7 @@ export function Wizard({ onComplete }: WizardProps): JSX.Element {
     errors: [],
   });
   const [, setTick] = useState(0);
+  const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
 
   // Initial detection
   useEffect(() => {
@@ -131,14 +141,20 @@ export function Wizard({ onComplete }: WizardProps): JSX.Element {
         if (n <= detected.length) {
           const item = detected[n - 1];
           if (item === undefined) return;
-          dispatch({
-            type: 'set-step',
-            step: {
-              kind: 'local-model',
-              chosen: { providerId: item.id, baseUrl: item.baseUrl, displayName: item.displayName },
-              models: await listModelsFor(item.baseUrl),
-            },
-          });
+          const chosen = {
+            providerId: item.id,
+            baseUrl: item.baseUrl,
+            displayName: item.displayName,
+          };
+          const models = await listModelsFor(item.baseUrl);
+          if (models.length === 0) {
+            // A running server with nothing installed used to end the wizard.
+            // Size a model to the machine and offer to fetch it instead.
+            const recommendation = recommendLocalModel(await detectTotalMemoryBytes());
+            dispatch({ type: 'set-step', step: { kind: 'offer-pull', chosen, recommendation } });
+            return;
+          }
+          dispatch({ type: 'set-step', step: { kind: 'local-model', chosen, models } });
         } else if (n === detected.length + 1) {
           dispatch({
             type: 'set-step',
@@ -187,6 +203,62 @@ export function Wizard({ onComplete }: WizardProps): JSX.Element {
         });
         return;
       }
+      case 'offer-pull': {
+        const { chosen, recommendation } = state.step;
+        const answer = text.trim().toLowerCase();
+        const model = recommendation.model;
+
+        if (answer === 'n' || answer === 'no') {
+          dispatch({
+            type: 'set-error',
+            messages: [
+              model === null
+                ? 'no model installed — configure a remote provider instead, or install a model and re-run'
+                : `no problem — run \`ollama pull ${model.tag}\` yourself, then start PIPER again`,
+            ],
+          });
+          return;
+        }
+
+        if (model === null) {
+          dispatch({ type: 'set-error', messages: [recommendation.reason] });
+          return;
+        }
+
+        // Only Ollama exposes an HTTP pull; the others want the weights on disk.
+        if (chosen.providerId !== 'ollama') {
+          dispatch({
+            type: 'set-error',
+            messages: [
+              `${chosen.displayName} cannot download models over HTTP — load ${model.tag} through its own interface, then re-run`,
+            ],
+          });
+          return;
+        }
+
+        dispatch({ type: 'set-step', step: { kind: 'pulling', chosen, tag: model.tag } });
+        setPullProgress(null);
+        try {
+          await pullOllamaModel({
+            baseUrl: chosen.baseUrl,
+            tag: model.tag,
+            onProgress: (p) => setPullProgress(p),
+          });
+        } catch (err) {
+          dispatch({
+            type: 'set-step',
+            step: {
+              kind: 'error',
+              message: `download failed: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          });
+          return;
+        }
+        dispatch({ type: 'set-step', step: { kind: 'budget', chosen, model: model.tag } });
+        return;
+      }
+      case 'pulling':
+        return; // input ignored while the download runs
       case 'local-model': {
         if (state.step.models.length === 0) {
           dispatch({ type: 'set-error', messages: ['no models available from this backend; install one and re-run'] });
@@ -357,7 +429,7 @@ export function Wizard({ onComplete }: WizardProps): JSX.Element {
       </Box>
       <Text dimColor>──────────────────────────────────────────────────────────────</Text>
       <Box marginTop={1} flexDirection="column">
-        <StepView step={state.step} input={state.input} />
+        <StepView step={state.step} input={state.input} pullProgress={pullProgress} />
         {state.errors.map((err, i) => (
           <Text key={i} color="red">  ! {err}</Text>
         ))}
@@ -366,7 +438,15 @@ export function Wizard({ onComplete }: WizardProps): JSX.Element {
   );
 }
 
-function StepView({ step, input }: { step: Step; input: string }): JSX.Element {
+function StepView({
+  step,
+  input,
+  pullProgress,
+}: {
+  step: Step;
+  input: string;
+  pullProgress: PullProgress | null;
+}): JSX.Element {
   switch (step.kind) {
     case 'detect':
       return <Text color="yellow">scanning local LLM endpoints…</Text>;
@@ -401,12 +481,56 @@ function StepView({ step, input }: { step: Step; input: string }): JSX.Element {
           <Prompt input={input} hint="pick 1..4" />
         </Box>
       );
+    case 'offer-pull': {
+      const rec = step.recommendation;
+      const ram =
+        rec.totalBytes === null ? 'unknown' : formatBytes(rec.totalBytes);
+      if (rec.model === null) {
+        return (
+          <Box flexDirection="column">
+            <Text color="yellow">{step.chosen.displayName} is running, but has no models installed.</Text>
+            <Text> </Text>
+            <Text dimColor>{rec.reason}</Text>
+            <Prompt input={input} hint="Ctrl+C to quit" />
+          </Box>
+        );
+      }
+      return (
+        <Box flexDirection="column">
+          <Text color="yellow">{step.chosen.displayName} is running, but has no models installed.</Text>
+          <Text> </Text>
+          <Text>{`This machine has ${ram} of memory, so PIPER suggests:`}</Text>
+          <Text> </Text>
+          <Text color="green">{`   ${rec.model.tag}   (${formatBytes(rec.model.sizeBytes)} download)`}</Text>
+          <Text dimColor>{`   ${rec.model.note}`}</Text>
+          <Text> </Text>
+          <Text dimColor>Nothing leaves your machine once it is installed.</Text>
+          <Prompt input={input} hint="download it now? [Y/n]" />
+        </Box>
+      );
+    }
+    case 'pulling': {
+      const p = pullProgress;
+      const pct = p === null || p.fraction === null ? null : Math.round(p.fraction * 100);
+      const bar =
+        pct === null ? '' : `[${'#'.repeat(Math.round(pct / 4)).padEnd(25, '.')}] ${pct}%`;
+      return (
+        <Box flexDirection="column">
+          <Text>{`Downloading ${step.tag} from ${step.chosen.displayName}...`}</Text>
+          <Text> </Text>
+          <Text color="green">{bar}</Text>
+          <Text dimColor>{p?.status ?? 'starting'}</Text>
+          <Text> </Text>
+          <Text dimColor>This runs once. Ctrl+C aborts.</Text>
+        </Box>
+      );
+    }
     case 'local-model': {
       const max = step.models.length;
       if (max === 0) {
         return (
           <Box flexDirection="column">
-            <Text color="yellow">No models available from {step.chosen.displayName}. Pull one (e.g. `ollama pull qwen3-coder:30b`) and re-run.</Text>
+            <Text color="yellow">No models installed on {step.chosen.displayName}.</Text>
             <Prompt input={input} hint="Ctrl+C to quit" />
           </Box>
         );
