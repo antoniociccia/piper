@@ -29,8 +29,8 @@ import { requireEnv } from './helpers.ts';
 // whatever the compose file currently declares, which is the most common
 // deploy step in the orderly demo and most small-team setups.
 
-const PATH_PATTERN = /^[A-Za-z0-9_./\-]+$/;
-const SERVICE_PATTERN = /^[A-Za-z0-9_.\-]+$/;
+const PATH_PATTERN = /^[A-Za-z0-9_./-]+$/;
+const SERVICE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 const argsSchema = z.object({
   environment: z.string(),

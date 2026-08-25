@@ -9,7 +9,7 @@ const argsSchema = z.object({
   environment: z.string(),
   container: z.string().regex(/^[A-Za-z0-9_.-]+$/, 'container must be a safe id or name'),
   lines: z.number().int().positive().max(5000).optional(),
-  since: z.string().regex(/^[A-Za-z0-9 :+\-T,]+$/, 'since must be a safe time spec').optional(),
+  since: z.string().regex(/^[A-Za-z0-9 :+T,-]+$/, 'since must be a safe time spec').optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

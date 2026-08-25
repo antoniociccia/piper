@@ -6,7 +6,7 @@ import { requireEnv } from './helpers.ts';
 
 const argsSchema = z.object({
   environment: z.string(),
-  filter: z.string().regex(/^[A-Za-z0-9._\- ]*$/).optional(),
+  filter: z.string().regex(/^[A-Za-z0-9._ -]*$/).optional(),
   limit: z.number().int().positive().max(500).optional(),
 });
 

@@ -7,8 +7,8 @@ import { requireEnv } from './helpers.ts';
 const argsSchema = z.object({
   environment: z.string(),
   filter_state: z.enum(['running', 'stopped', 'pending', 'terminated', 'all']).optional(),
-  profile: z.string().regex(/^[A-Za-z0-9_\-]+$/).optional(),
-  region: z.string().regex(/^[A-Za-z0-9\-]+$/).optional(),
+  profile: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
+  region: z.string().regex(/^[A-Za-z0-9-]+$/).optional(),
 });
 
 type Args = z.infer<typeof argsSchema>;

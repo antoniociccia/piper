@@ -4,11 +4,11 @@ import { buildSshArgvForEnv } from '../../exec/ssh.ts';
 import type { Action } from '../types.ts';
 import { requireEnv } from './helpers.ts';
 
-const PATH_PATTERN = /^[A-Za-z0-9_./\-]+$/;
+const PATH_PATTERN = /^[A-Za-z0-9_./-]+$/;
 
 const argsSchema = z.object({
   environment: z.string(),
-  run_id: z.union([z.number().int().positive(), z.string().regex(/^[A-Za-z0-9_\-]+$/)]),
+  run_id: z.union([z.number().int().positive(), z.string().regex(/^[A-Za-z0-9_-]+$/)]),
   repo: z.string().regex(PATH_PATTERN).optional(),
   log_failed: z.boolean().optional(),
 });

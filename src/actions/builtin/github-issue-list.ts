@@ -6,9 +6,9 @@ import { requireEnv } from './helpers.ts';
 
 const argsSchema = z.object({
   environment: z.string(),
-  repo: z.string().regex(/^[A-Za-z0-9_./\-]+$/).optional(),
+  repo: z.string().regex(/^[A-Za-z0-9_./-]+$/).optional(),
   state: z.enum(['open', 'closed', 'all']).optional(),
-  label: z.string().regex(/^[A-Za-z0-9_\-]+$/).optional(),
+  label: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
   limit: z.number().int().positive().max(50).optional(),
 });
 
