@@ -96,10 +96,14 @@ async function readConfig(): Promise<{
         `(length=${c.value.length}, prefix=${c.value.slice(0, 6)})`,
     );
   }
+  // Provider-scoped default: a local runtime cannot resolve an aggregator id,
+  // so the fallback has to come from the provider table rather than a single
+  // remote/local coin flip. See PROVIDERS[...].defaultModel.
   const model =
     readEnv(ENV_VARS.MODEL) ??
     credentials?.defaultModel ??
-    (provider.kind === 'remote' ? 'deepseek/deepseek-v4-pro' : 'mistralai/devstral-small-2-24b');
+    provider.defaultModel ??
+    'deepseek/deepseek-v4-pro';
   const rawBudget = readEnv(ENV_VARS.MAX_SESSION_COST_USD);
   const maxSessionCostUsd =
     rawBudget !== undefined

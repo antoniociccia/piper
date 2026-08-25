@@ -14,6 +14,14 @@ export interface ProviderConfig {
   readonly defaultBaseUrl: string | null;
   readonly defaultPort: number | null;
   readonly requiresApiKey: boolean;
+  /**
+   * Model used when the user names a provider but not a model. Local providers
+   * MUST name a tag their own runtime can resolve — a vendor-prefixed
+   * aggregator id like `mistralai/devstral-small-2-24b` is not one, and makes
+   * the first request of a fresh local setup fail with "model not found".
+   * `null` where there is nothing sensible to guess.
+   */
+  readonly defaultModel: string | null;
   readonly enforcePrivacyDeny: boolean;
   readonly displayName: string;
 }
@@ -26,6 +34,11 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderConfig>> = {
     defaultPort: 11434,
     requiresApiKey: false,
     enforcePrivacyDeny: false,
+    // Measured against PIPER's own analyze flow on a host with seven planted
+    // incidents: qwen3.5 was the only family that produced the grounded
+    // citations the verifier requires. 4b is the smallest that works, so it is
+    // the default that fits an ordinary laptop.
+    defaultModel: 'qwen3.5:4b',
     displayName: 'Ollama',
   },
   lmstudio: {
@@ -35,6 +48,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderConfig>> = {
     defaultPort: 1234,
     requiresApiKey: false,
     enforcePrivacyDeny: false,
+    defaultModel: 'qwen3.5-4b',
     displayName: 'LM Studio',
   },
   llamacpp: {
@@ -44,6 +58,9 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderConfig>> = {
     defaultPort: 8080,
     requiresApiKey: false,
     enforcePrivacyDeny: false,
+    // llama.cpp serves whatever single GGUF it was started with and ignores
+    // the field, so this is a label rather than a selector.
+    defaultModel: 'local-model',
     displayName: 'llama.cpp (server)',
   },
   vllm: {
@@ -53,6 +70,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderConfig>> = {
     defaultPort: 8000,
     requiresApiKey: false,
     enforcePrivacyDeny: false,
+    defaultModel: 'qwen3.5-4b',
     displayName: 'vLLM',
   },
   openrouter: {
@@ -62,6 +80,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderConfig>> = {
     defaultPort: null,
     requiresApiKey: true,
     enforcePrivacyDeny: true,
+    defaultModel: 'deepseek/deepseek-v4-pro',
     displayName: 'OpenRouter',
   },
   custom: {
@@ -71,6 +90,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderConfig>> = {
     defaultPort: null,
     requiresApiKey: false,
     enforcePrivacyDeny: false,
+    defaultModel: null,
     displayName: 'Custom OpenAI-compatible',
   },
 };

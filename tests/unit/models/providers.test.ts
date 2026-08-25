@@ -46,3 +46,30 @@ describe('models/providers', () => {
     expect([...LOCAL_PROVIDERS].sort()).toEqual(['llamacpp', 'lmstudio', 'ollama', 'vllm']);
   });
 });
+
+/**
+ * The fallback model matters more than it looks: it is what a user gets when
+ * they point PIPER at a local server without naming a model. The value shipped
+ * before this test was `mistralai/devstral-small-2-24b` — an OpenRouter-style
+ * id, not a tag any local runtime can resolve. Ollama answered
+ * `model 'mistralai/devstral-small-2-24b' not found`, so the very first
+ * request of a fresh local setup failed.
+ */
+describe('providers — default model', () => {
+  test('every local provider names a model its runtime can actually resolve', () => {
+    for (const id of LOCAL_PROVIDERS) {
+      const model = PROVIDERS[id].defaultModel;
+      expect(model).toBeTruthy();
+      // A vendor-prefixed path is an aggregator id (OpenRouter), never a local tag.
+      expect(model).not.toContain('/');
+    }
+  });
+
+  test('the remote default is a vendor-qualified aggregator id', () => {
+    expect(PROVIDERS.openrouter.defaultModel).toContain('/');
+  });
+
+  test('custom endpoints get no model guess', () => {
+    expect(PROVIDERS.custom.defaultModel).toBeNull();
+  });
+});
