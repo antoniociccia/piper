@@ -110,7 +110,21 @@ const card = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"
   <rect width="${W}" height="${H}" fill="url(#scan)"/>
 </svg>`;
 
-await sharp(Buffer.from(card)).png({ compressionLevel: 9 }).toFile('docs/assets/social-preview.png');
+// Flattened to opaque RGB, deliberately. The card's background is fully opaque
+// anyway, so the alpha channel carries no information — and GitHub's social
+// preview pipeline accepts an RGBA PNG, records it, and then serves 404 for it.
+// A JPEG copy is written alongside as a fallback that cannot carry alpha at all.
+const cardPipeline = sharp(Buffer.from(card)).flatten({ background: BG });
+
+await cardPipeline
+  .clone()
+  .png({ compressionLevel: 9 })
+  .toFile('docs/assets/social-preview.png');
+
+await cardPipeline
+  .clone()
+  .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
+  .toFile('docs/assets/social-preview.jpg');
 
 // The master is 1536x1024; the README slot is 320px and the landing page's is
 // smaller still. 640 covers both at 2x on a retina display.
@@ -119,7 +133,11 @@ await sharp('docs/assets/piper-logo.png')
   .png({ compressionLevel: 9, palette: true })
   .toFile('docs/assets/piper-logo-640.png');
 
-for (const f of ['docs/assets/social-preview.png', 'docs/assets/piper-logo-640.png']) {
+for (const f of [
+  'docs/assets/social-preview.png',
+  'docs/assets/social-preview.jpg',
+  'docs/assets/piper-logo-640.png',
+]) {
   const bytes = (await Bun.file(f).arrayBuffer()).byteLength;
   const meta = await sharp(f).metadata();
   console.log(`${f}  ${meta.width}x${meta.height}  ${(bytes / 1024).toFixed(0)} KB`);
