@@ -4,23 +4,25 @@
 
 # PIPER
 
-**DevOps at the speed of thought.**
+**An AI DevOps copilot that cannot invent a command.**
 
-A terminal-first, LLM-driven DevOps copilot that is *safe by construction* —
-the LLM proposes, deterministic code validates, the human approves anything that mutates.
+It reads your servers, finds what is broken, and cites the output behind every
+claim — driving `ssh`, `docker`, `kubectl` and friends from a typed catalog it
+is not allowed to step outside of. Runs on a 4B model on your laptop, with no
+API key and nothing leaving the machine.
 
 [![CI](https://github.com/antoniociccia/piper/actions/workflows/ci.yml/badge.svg)](https://github.com/antoniociccia/piper/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Bun](https://img.shields.io/badge/Bun-%E2%89%A51.3-black?logo=bun)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![Tests](https://img.shields.io/badge/tests-386%20passing-brightgreen)](#tests)
-[![Status](https://img.shields.io/badge/status-M1.5%20%E2%80%94%20diagnostics%20%2B%20RAG-success)]()
+[![Tests](https://img.shields.io/badge/tests-741%20passing-brightgreen)](#tests)
+[![Local first](https://img.shields.io/badge/local-no%20API%20key%20required-7ddc6a)](#run-it-fully-local)
 
 [**Why**](#why-this-exists) ·
 [**Quick start**](#quick-start) ·
+[**Run it local**](#run-it-fully-local) ·
 [**The gate**](#the-deterministic-gate) ·
 [**Catalog**](#action-catalog) ·
-[**Knowledge base**](#knowledge-base--rag) ·
 [**Security**](#security)
 
 </div>
@@ -243,6 +245,53 @@ bun run build      # ./dist/piper, ~76 MB
 The binary embeds PostgreSQL WASM (~13 MB) and Yoga layout. The embedding
 model is **not** bundled — it lazy-fetches on first RAG use (~120 MB, one
 time) and caches at `~/.piper/cache/models/`.
+
+---
+
+## Run it fully local
+
+PIPER speaks one API — the OpenAI `/v1/chat/completions` shape — so any local
+server works: Ollama, LM Studio, llama.cpp, vLLM. Point it at one and **no
+prompt, no log line and no command output ever leaves your machine**. There is
+no cloud component to opt out of.
+
+The question that matters is how small a model can be before the loop stops
+holding together. So we measured it, rather than guessing.
+
+The test: a Debian host with **seven planted incidents** — Redis OOM-killed,
+its worker dead, the app degraded, a backup failing for two days, an expired
+TLS certificate, a runaway process, and a 62 MB log nothing had rotated. One
+prompt: *"analyze this server and tell me everything that is broken."* Same
+scenario, same flow, four models.
+
+| Model | Size | Grounded citations | Incidents found |
+|---|---|---|---|
+| `qwen3.5:9b` | 6.6 GB | 11 | **4 / 7** |
+| `qwen3.5:4b` | 3.4 GB | 8 | 3 / 7 |
+| `granite4.1:3b` | 2.1 GB | 0 | 2 / 7 |
+| `phi4-mini:3.8b` | 2.5 GB | 0 | 1 / 7 |
+
+**All four called tools correctly.** Tool-calling is not the bottleneck at this
+size — producing evidence-linked output is. Granite and Phi wrote fluent prose
+citing nothing, and PIPER's verifier refused every report they produced, which
+is the system working as designed: an ungrounded report is not shown at all.
+
+So the floor is a **4B model on an ordinary laptop**, and `qwen3.5:4b` is the
+default when PIPER detects Ollama. Nothing here needs a GPU rental or a
+workstation.
+
+```bash
+ollama pull qwen3.5:4b
+PIPER_PROVIDER=ollama piper
+```
+
+Two things worth saying plainly, because a benchmark table invites over-reading:
+
+- These are **single runs**, not averaged. Treat the ordering as indicative.
+- A 4B model handles a **focused** question well ("uptime, memory and disk —
+  anything unhealthy?"). Open-ended triage across a genuinely messy host is
+  where the bigger models pull ahead. Both are honest uses; they are not the
+  same difficulty.
 
 ---
 
