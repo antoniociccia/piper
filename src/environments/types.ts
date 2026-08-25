@@ -1,3 +1,7 @@
+// `local.ts` imports from this file with `import type` only, so this cycle is
+// erased at runtime.
+import { isLocalEnvironmentName } from './local.ts';
+
 export interface Environment {
   readonly name: string;
   readonly host: string;
@@ -31,6 +35,14 @@ export function validateEnvironmentInput(input: EnvironmentInput): void {
   if (!NAME_PATTERN.test(input.name)) {
     throw new InvalidEnvironmentError(
       `invalid environment name: ${input.name} (must match ${NAME_PATTERN})`,
+    );
+  }
+  // `local` is the built-in target that runs commands without SSH. Letting a
+  // row claim that name would let a registered host masquerade as the local
+  // machine — or hide it — so the name is reserved, case-insensitively.
+  if (isLocalEnvironmentName(input.name)) {
+    throw new InvalidEnvironmentError(
+      `environment name '${input.name}' is reserved for the machine PIPER runs on`,
     );
   }
   if (input.host.trim() === '') {

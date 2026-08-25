@@ -1,3 +1,4 @@
+import { isLocalEnvironment } from '../environments/local.ts';
 import type { Environment } from '../environments/types.ts';
 import { argvToShell } from './types.ts';
 
@@ -68,6 +69,11 @@ export function buildSshArgvForEnv(
   command: readonly string[],
   connectTimeoutSec?: number,
 ): readonly string[] {
+  // The local target runs the command as a plain subprocess — no ssh, no host,
+  // no key. Every action in the catalog routes through here, so this one branch
+  // is what makes all of them work against the machine PIPER runs on.
+  if (isLocalEnvironment(env)) return command;
+
   return buildSshArgv({
     host: `${env.sshUser}@${env.host}`,
     command,

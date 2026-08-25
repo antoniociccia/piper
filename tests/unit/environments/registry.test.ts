@@ -99,9 +99,11 @@ describe('environments/registry — list', () => {
 });
 
 describe('environments/registry — describeForLLM', () => {
-  test('describes empty state with guidance', async () => {
+  test('describes the empty state as local-only, not as nothing to do', async () => {
     const desc = await registry.describeForLLM();
-    expect(desc).toContain('No environments registered');
+    expect(desc).toContain('Available environments (1)');
+    expect(desc).toContain('local');
+    expect(desc).toContain('No remote hosts are registered yet');
   });
 
   test('describes all entries with user@host[:port] [tags] — description', async () => {
@@ -120,7 +122,9 @@ describe('environments/registry — describeForLLM', () => {
       tags: ['staging'],
     });
     const desc = await registry.describeForLLM();
-    expect(desc).toContain('Available environments (2)');
+    // Two registered hosts plus the always-present built-in `local` target.
+    expect(desc).toContain('Available environments (3)');
+    expect(desc).toContain('local');
     expect(desc).toContain('prod: deploy@prod.example.com:22 [prod, critical] — production app server');
     expect(desc).toContain('staging: ops@10.0.0.10 [staging]');
   });
