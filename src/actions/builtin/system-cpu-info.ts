@@ -19,7 +19,14 @@ export const systemCpuInfo: Action<Args, CpuInfoResult> = {
   argsSchema,
   buildCommand: (_args, ctx) => {
     const env = requireEnv(ctx);
-    return buildSshArgvForEnv(env, ['sh', '-c', 'lscpu 2>/dev/null || head -30 /proc/cpuinfo']);
+    // `lscpu` and `/proc/cpuinfo` are both Linux-only; on macOS/BSD the same
+    // facts come from sysctl. Linux hosts still hit the first branch.
+    return buildSshArgvForEnv(env, [
+      'sh',
+      '-c',
+      'lscpu 2>/dev/null || head -30 /proc/cpuinfo 2>/dev/null || ' +
+        'sysctl -a 2>/dev/null | grep -E "machdep.cpu.brand_string|hw.ncpu|hw.physicalcpu|hw.memsize"',
+    ]);
   },
   parseResult: (raw) => ({ raw: raw.stdout.trim() }),
 };

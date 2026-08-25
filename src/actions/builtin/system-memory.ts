@@ -36,7 +36,15 @@ export const systemMemory: Action<Args, MemoryReading> = {
   tier: 'read',
   description: 'Report RAM and swap usage on the remote environment via `free -h` (Linux).',
   argsSchema,
-  buildCommand: (_args, ctx) => buildSshArgvForEnv(requireEnv(ctx), ['free', '-h']),
+  // `free` ships with procps and does not exist on macOS/BSD. Try it first so a
+  // Linux host is unaffected, then fall back to the Darwin equivalents: `top`'s
+  // PhysMem line is the readable one, `vm_stat` is the last resort.
+  buildCommand: (_args, ctx) =>
+    buildSshArgvForEnv(requireEnv(ctx), [
+      'sh',
+      '-c',
+      'free -h 2>/dev/null || top -l 1 -s 0 2>/dev/null | grep -i "^PhysMem" || vm_stat',
+    ]),
   parseResult: (raw) => {
     const out: {
       raw: string;

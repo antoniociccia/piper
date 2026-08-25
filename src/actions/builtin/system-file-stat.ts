@@ -29,7 +29,19 @@ export const systemFileStat: Action<Args, FileStat | null> = {
   argsSchema,
   buildCommand: (args, ctx) => {
     const env = requireEnv(ctx);
-    return buildSshArgvForEnv(env, ['stat', '-c', '%n|%s|%a|%U|%G|%y', args.path]);
+    // GNU stat wants `-c`, BSD/macOS stat wants `-f`, and both are asked for
+    // the same six pipe-separated fields so parseResult stays format-agnostic.
+    //
+    // `args.path` is unconstrained user input, so it is passed as the shell's
+    // positional `$1` and never interpolated into the script text. `sh -c
+    // <script> <argv0> <path>` binds it to $1 without any expansion.
+    return buildSshArgvForEnv(env, [
+      'sh',
+      '-c',
+      'stat -c "%n|%s|%a|%U|%G|%y" "$1" 2>/dev/null || stat -f "%N|%z|%Lp|%Su|%Sg|%Sm" "$1"',
+      'sh',
+      args.path,
+    ]);
   },
   parseResult: (raw) => {
     const trimmed = raw.stdout.trim();
